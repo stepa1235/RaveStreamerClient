@@ -1,0 +1,16 @@
+# Root gitignore
+**/build/
+**/.dart_tool/
+**/.flutter-plugins*
+**/.idea/
+**/.gradle/
+**/local.properties
+**/*.exe
+**/*.apk
+**/*.zip
+**/*.bat
+**/*.cmd
+**/*.log
+**/.agents/
+**/.system_generated/
+**/brain/
