@@ -292,7 +292,7 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
   void _checkForUpdates(Map<String, dynamic> jsonData) {
     if (!jsonData.containsKey('latest_version')) return;
     final latestVersion = jsonData['latest_version'] as String;
-    const String currentVersion = '1.0.0';
+    const String currentVersion = '1.0.2';
 
     if (latestVersion != currentVersion) {
       String downloadUrl = '';
@@ -328,8 +328,8 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
           ),
           content: Text(
             _locale == 'ru'
-                ? 'Доступна новая версия RaveStreamer v$version (текущая v1.0.0).\nХотите обновиться?'
-                : 'A new version of RaveStreamer v$version is available (current v1.0.0).\nDo you want to update?',
+                ? 'Доступна новая версия RaveStreamer v$version (текущая v1.0.2).\nХотите обновиться?'
+                : 'A new version of RaveStreamer v$version is available (current v1.0.2).\nDo you want to update?',
             style: const TextStyle(color: Colors.white70),
           ),
           actions: [
@@ -581,38 +581,40 @@ class _ConnectionPageState extends State<ConnectionPage> {
   Widget build(BuildContext context) {
     final themeData = _themes[widget.themeName] ?? _themes['Dark']!;
     return Scaffold(
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: themeData.bgGradient,
-          ),
-        ),
-        child: Center(
-          child: SingleChildScrollView(
-            child: Padding(
-              padding: const EdgeInsets.all(24.0),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 450),
-                child: Container(
-                  padding: const EdgeInsets.all(32.0),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.03),
-                    borderRadius: BorderRadius.circular(24),
-                    border: Border.all(
-                      color: Colors.white.withOpacity(0.08),
-                      width: 1.5,
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.3),
-                        blurRadius: 20,
-                        spreadRadius: 2,
-                      )
-                    ],
-                  ),
-                  child: Column(
+      body: Stack(
+        children: [
+          Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: themeData.bgGradient,
+              ),
+            ),
+            child: Center(
+              child: SingleChildScrollView(
+                child: Padding(
+                  padding: const EdgeInsets.all(24.0),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 450),
+                    child: Container(
+                      padding: const EdgeInsets.all(32.0),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.03),
+                        borderRadius: BorderRadius.circular(24),
+                        border: Border.all(
+                          color: Colors.white.withOpacity(0.08),
+                          width: 1.5,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.3),
+                            blurRadius: 20,
+                            spreadRadius: 2,
+                          )
+                        ],
+                      ),
+                      child: Column(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
@@ -766,6 +768,29 @@ class _ConnectionPageState extends State<ConnectionPage> {
             ),
           ),
         ),
+      ),
+          Positioned(
+            left: 16,
+            bottom: 16,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.4),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.white.withOpacity(0.1)),
+              ),
+              child: Text(
+                'v1.0.2',
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.6),
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1031,14 +1056,14 @@ class _RoomPageState extends State<RoomPage> {
     });
 
     // Handle Chat Message Broadcast
-    _socket.on('chat-msg-broadcast', (data) {
+    _socket.on('chat-msg', (data) {
       if (_isDisposed || !mounted) return;
       setState(() {
         _messages.add({
           'clientId': (data['clientId'] ?? '') as String,
           'sender': data['username'] as String,
           'text': data['text'] as String,
-          'time': data['time'] as String,
+          'time': (data['timestamp'] ?? data['time'] ?? '') as String,
         });
       });
       // Scroll to bottom
@@ -1064,7 +1089,7 @@ class _RoomPageState extends State<RoomPage> {
             'clientId': (msg['clientId'] ?? '') as String,
             'sender': msg['username'] as String,
             'text': msg['text'] as String,
-            'time': msg['time'] as String,
+            'time': (msg['timestamp'] ?? msg['time'] ?? '') as String,
           });
         }
       });
@@ -2021,6 +2046,18 @@ class _RoomPageState extends State<RoomPage> {
               '${_loc('room')}${widget.roomId}',
               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
             ),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.08),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                'v1.0.2',
+                style: TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.5), fontWeight: FontWeight.bold),
+              ),
+            ),
           ],
         ),
         backgroundColor: const Color(0xFF0F0C1B),
@@ -2740,124 +2777,156 @@ class _RoomPageState extends State<RoomPage> {
         // Message log
         Expanded(
           child: Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.01),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.white.withOpacity(0.03)),
-            ),
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
             child: ListView.builder(
               controller: _chatScrollController,
               itemCount: _messages.length,
               itemBuilder: (context, index) {
                 final msg = _messages[index];
                 final isMe = msg['clientId'] == widget.clientId;
+                final senderInitial = (msg['sender'] != null && msg['sender']!.isNotEmpty)
+                    ? msg['sender']!.substring(0, 1).toUpperCase()
+                    : '?';
 
-                return Row(
-                  mainAxisAlignment: isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    if (!isMe)
-                      Padding(
-                        padding: const EdgeInsets.only(right: 6, bottom: 4),
-                        child: CircleAvatar(
-                          radius: 12,
-                          backgroundColor: const Color(0xFF6C63FF).withOpacity(0.5),
-                          child: Text(
-                            msg['sender']!.substring(0, 1).toUpperCase(),
-                            style: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold),
-                          ),
-                        ),
-                      ),
-                    Flexible(
-                      child: Container(
-                        margin: const EdgeInsets.symmetric(vertical: 4),
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                        constraints: const BoxConstraints(maxWidth: 220),
-                        decoration: BoxDecoration(
-                          color: isMe 
-                            ? primaryColor.withOpacity(0.25) 
-                            : Colors.white.withOpacity(0.06),
-                          borderRadius: BorderRadius.only(
-                            topLeft: const Radius.circular(12),
-                            topRight: const Radius.circular(12),
-                            bottomLeft: isMe ? const Radius.circular(12) : const Radius.circular(0),
-                            bottomRight: isMe ? const Radius.circular(0) : const Radius.circular(12),
-                          ),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                        if (!isMe)
-                          Text(
-                            msg['sender']!,
-                            style: const TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold,
-                              color: Color(0xFF00F2FE),
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Row(
+                    mainAxisAlignment: isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      if (!isMe)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 8, bottom: 2),
+                          child: CircleAvatar(
+                            radius: 14,
+                            backgroundColor: const Color(0xFF6C63FF).withOpacity(0.3),
+                            child: Text(
+                              senderInitial,
+                              style: const TextStyle(fontSize: 10, color: Color(0xFF00F2FE), fontWeight: FontWeight.bold),
                             ),
                           ),
-                        const SizedBox(height: 2),
-                        Text(
-                          msg['text']!,
-                          style: TextStyle(fontSize: _chatFontSize, color: Colors.white),
                         ),
-                        const SizedBox(height: 2),
-                        Align(
-                          alignment: Alignment.bottomRight,
-                          child: Text(
-                            msg['time']!,
-                            style: TextStyle(fontSize: 8, color: Colors.white.withOpacity(0.4)),
+                      Flexible(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                          constraints: const BoxConstraints(maxWidth: 260),
+                          decoration: BoxDecoration(
+                            gradient: isMe
+                                ? LinearGradient(
+                                    colors: [
+                                      primaryColor,
+                                      primaryColor.withOpacity(0.85),
+                                    ],
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                  )
+                                : null,
+                            color: isMe ? null : Colors.white.withOpacity(0.08),
+                            borderRadius: BorderRadius.only(
+                              topLeft: const Radius.circular(16),
+                              topRight: const Radius.circular(16),
+                              bottomLeft: isMe ? const Radius.circular(16) : const Radius.circular(4),
+                              bottomRight: isMe ? const Radius.circular(4) : const Radius.circular(16),
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.1),
+                                blurRadius: 4,
+                                offset: const Offset(0, 2),
+                              )
+                            ],
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (!isMe)
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 2),
+                                  child: Text(
+                                    msg['sender'] ?? '',
+                                    style: const TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.bold,
+                                      color: Color(0xFF00F2FE),
+                                    ),
+                                  ),
+                                ),
+                              Text(
+                                msg['text'] ?? '',
+                                style: TextStyle(
+                                  fontSize: _chatFontSize,
+                                  color: Colors.white,
+                                  height: 1.3,
+                                ),
+                              ),
+                              const SizedBox(height: 3),
+                              Align(
+                                alignment: Alignment.bottomRight,
+                                child: Text(
+                                  msg['time'] ?? '',
+                                  style: TextStyle(
+                                    fontSize: 9,
+                                    color: Colors.white.withOpacity(0.5),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                      ],
-                    ),
-                  ),
-                ),
-                if (isMe)
-                  Padding(
-                    padding: const EdgeInsets.only(left: 6, bottom: 4),
-                    child: CircleAvatar(
-                      radius: 12,
-                      backgroundColor: const Color(0xFF00F2FE).withOpacity(0.5),
-                      child: Text(
-                        msg['sender']!.substring(0, 1).toUpperCase(),
-                        style: const TextStyle(fontSize: 10, color: Colors.black, fontWeight: FontWeight.bold),
                       ),
-                    ),
+                    ],
                   ),
-              ],
-            );
+                );
               },
             ),
           ),
         ),
         const SizedBox(height: 8),
-        // Send message input row
-        Row(
-          children: [
-            Expanded(
-              child: TextField(
-                controller: _chatInputController,
-                focusNode: _chatFocusNode,
-                onSubmitted: (_) => _sendChatMessage(),
-                decoration: InputDecoration(
-                  hintText: _loc('typeMessage'),
-                  hintStyle: TextStyle(color: Colors.white.withOpacity(0.3), fontSize: 12),
-                  isDense: true,
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+        // Send message input bar
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.05),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: Colors.white.withOpacity(0.08)),
+          ),
+          child: Row(
+            children: [
+              const SizedBox(width: 12),
+              Expanded(
+                child: TextField(
+                  controller: _chatInputController,
+                  focusNode: _chatFocusNode,
+                  onSubmitted: (_) => _sendChatMessage(),
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  decoration: InputDecoration(
+                    hintText: _loc('typeMessage'),
+                    hintStyle: TextStyle(color: Colors.white.withOpacity(0.35), fontSize: 12),
+                    border: InputBorder.none,
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(vertical: 8),
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(width: 6),
-            IconButton(
-              icon: const Icon(Icons.send, size: 18),
-              color: const Color(0xFF00F2FE),
-              onPressed: _sendChatMessage,
-            ),
-          ],
+              const SizedBox(width: 8),
+              InkWell(
+                onTap: _sendChatMessage,
+                borderRadius: BorderRadius.circular(20),
+                child: Container(
+                  width: 36,
+                  height: 36,
+                  decoration: const BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: LinearGradient(
+                      colors: [Color(0xFF00F2FE), Color(0xFF4FACFE)],
+                    ),
+                  ),
+                  child: const Icon(Icons.send_rounded, size: 18, color: Colors.black),
+                ),
+              ),
+            ],
+          ),
         ),
       ],
     );
@@ -3672,7 +3741,7 @@ const String _htmlPlayerCode = r'''
           }
 
           const isDirectFile = url.includes('.mp4') || url.includes('.webm') || url.includes('.ogg') || url.includes('googlevideo.com') || url.includes('vk.com') || url.includes('vkuser') || url.includes('vk-cdn');
-          if (Hls.isSupported() && !isDirectFile) {
+          if (typeof Hls !== 'undefined' && Hls.isSupported() && !isDirectFile) {
             console.log('Loading as HLS stream using Hls.js: ' + url);
             hls = new Hls({
               xhrSetup: function(xhr, segmentUrl) {
