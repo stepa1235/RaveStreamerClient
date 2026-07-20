@@ -16,6 +16,7 @@ import 'screen_picker.dart';
 import 'webrtc_manager.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart' hide Webview;
 import 'package:wakelock_plus/wakelock_plus.dart';
+import 'package:path_provider/path_provider.dart';
 
 const Map<String, Map<String, String>> _localizedValues = {
   'en': {
@@ -118,14 +119,29 @@ const Map<String, Map<String, String>> _localizedValues = {
   }
 };
 
+Future<String> _getSettingsPath() async {
+  if (Platform.isWindows) {
+    return 'C:\\RaveStreamer\\settings.json';
+  }
+  // Android / other platforms
+  final dir = await getApplicationDocumentsDirectory();
+  return '${dir.path}/ravestreamer_settings.json';
+}
+
 Future<void> saveSettings(Map<String, dynamic> settings) async {
   try {
-    final dir = Directory('C:\\RaveStreamer');
-    if (!await dir.exists()) {
-      await dir.create(recursive: true);
+    if (Platform.isWindows) {
+      final dir = Directory('C:\\RaveStreamer');
+      if (!await dir.exists()) await dir.create(recursive: true);
     }
-    final file = File('C:\\RaveStreamer\\settings.json');
-    await file.writeAsString(jsonEncode(settings));
+    final path = await _getSettingsPath();
+    final file = File(path);
+    Map<String, dynamic> existing = {};
+    if (await file.exists()) {
+      try { existing = jsonDecode(await file.readAsString()) as Map<String, dynamic>; } catch(_) {}
+    }
+    existing.addAll(settings);
+    await file.writeAsString(jsonEncode(existing));
   } catch (e) {
     debugPrint('Error saving settings: $e');
   }
@@ -133,7 +149,8 @@ Future<void> saveSettings(Map<String, dynamic> settings) async {
 
 Future<Map<String, dynamic>> loadSettings() async {
   try {
-    final file = File('C:\\RaveStreamer\\settings.json');
+    final path = await _getSettingsPath();
+    final file = File(path);
     if (await file.exists()) {
       final content = await file.readAsString();
       return jsonDecode(content) as Map<String, dynamic>;
@@ -301,7 +318,7 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
   void _checkForUpdates(Map<String, dynamic> jsonData) {
     if (!jsonData.containsKey('latest_version')) return;
     final latestVersion = jsonData['latest_version'] as String;
-    const String currentVersion = '1.0.2';
+    const String currentVersion = '1.1.4';
 
     if (latestVersion != currentVersion) {
       String downloadUrl = '';
@@ -337,8 +354,8 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
           ),
           content: Text(
             _locale == 'ru'
-                ? 'Доступна новая версия RaveStreamer v$version (текущая v1.1.0).\nХотите обновиться?'
-                : 'A new version of RaveStreamer v$version is available (current v1.1.0).\nDo you want to update?',
+                ? 'Доступна новая версия RaveStreamer v$version (текущая v1.1.2).\nХотите обновиться?'
+                : 'A new version of RaveStreamer v$version is available (current v1.1.4).\nDo you want to update?',
             style: const TextStyle(color: Colors.white70),
           ),
           actions: [
@@ -498,7 +515,9 @@ class _ConnectionPageState extends State<ConnectionPage> {
   late final TextEditingController _serverController;
   late final TextEditingController _usernameController;
   final _roomController = TextEditingController(text: 'lobby');
+  final _passwordController = TextEditingController();
   bool _isConnecting = false;
+  bool _isPrivateRoom = false;
   String? _errorMessage;
 
 
@@ -518,6 +537,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
     _serverController.dispose();
     _usernameController.dispose();
     _roomController.dispose();
+    _passwordController.dispose();
     super.dispose();
   }
 
@@ -574,6 +594,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
           serverUrl: serverUrl,
           username: username,
           roomId: roomId,
+          password: _isPrivateRoom ? _passwordController.text.trim() : null,
           locale: widget.locale,
           onLocaleChange: widget.onLocaleChange,
           themeName: widget.themeName,
@@ -718,6 +739,49 @@ class _ConnectionPageState extends State<ConnectionPage> {
                           FilteringTextInputFormatter.allow(RegExp(r'[a-zA-Z0-9]')),
                         ],
                       ),
+                      const SizedBox(height: 16),
+                      
+                      // Private Room Switch
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(
+                                _isPrivateRoom ? Icons.lock_outline : Icons.lock_open,
+                                size: 18,
+                                color: _isPrivateRoom ? const Color(0xFF00F2FE) : Colors.white54,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                widget.locale == 'ru' ? 'Приватная комната' : 'Private Room',
+                                style: TextStyle(
+                                  color: _isPrivateRoom ? Colors.white : Colors.white54,
+                                  fontSize: 14,
+                                ),
+                              ),
+                            ],
+                          ),
+                          Switch(
+                            value: _isPrivateRoom,
+                            activeColor: const Color(0xFF00F2FE),
+                            onChanged: (val) {
+                              setState(() {
+                                _isPrivateRoom = val;
+                              });
+                            },
+                          ),
+                        ],
+                      ),
+                      if (_isPrivateRoom) ...[
+                        const SizedBox(height: 12),
+                        _buildTextField(
+                          controller: _passwordController,
+                          label: widget.locale == 'ru' ? 'ПАРОЛЬ КОМНАТЫ' : 'ROOM PASSWORD',
+                          icon: Icons.password,
+                          hint: widget.locale == 'ru' ? 'Введите пароль' : 'Enter password',
+                        ),
+                      ],
                       const SizedBox(height: 24),
 
                       // Error message container
@@ -789,7 +853,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
                 border: Border.all(color: Colors.white.withOpacity(0.1)),
               ),
               child: Text(
-                'v1.1.0',
+                'v1.1.4',
                 style: TextStyle(
                   color: Colors.white.withOpacity(0.6),
                   fontSize: 11,
@@ -841,6 +905,7 @@ class RoomPage extends StatefulWidget {
   final String serverUrl;
   final String username;
   final String roomId;
+  final String? password;
   final String locale;
   final ValueChanged<String> onLocaleChange;
   final String themeName;
@@ -854,6 +919,7 @@ class RoomPage extends StatefulWidget {
     required this.serverUrl,
     required this.username,
     required this.roomId,
+    this.password,
     required this.locale,
     required this.onLocaleChange,
     required this.themeName,
@@ -915,6 +981,16 @@ class _RoomPageState extends State<RoomPage> {
     super.initState();
     _locale = widget.locale;
     _chatFontSize = widget.chatFontSize;
+    
+    // Load stream settings
+    loadSettings().then((data) {
+      if (mounted && data.containsKey('preferredQuality')) {
+        setState(() {
+          _preferredQuality = data['preferredQuality'];
+        });
+      }
+    });
+
     // Pre-create player ONCE
     final player = WebviewPlayer();
     player.initialize().then((_) {
@@ -1003,6 +1079,96 @@ class _RoomPageState extends State<RoomPage> {
       _socket.emit('join-room', {
         'roomId': widget.roomId,
         'username': widget.username,
+        'password': widget.password,
+      });
+      
+      _socket.on('room-error', (msg) {
+        if (!mounted || _isDisposed) return;
+        
+        bool isWrongPassword = false;
+        String errorText = msg.toString();
+        
+        if (msg is Map) {
+          if (msg['type'] == 'WRONG_PASSWORD') isWrongPassword = true;
+          errorText = msg['message']?.toString() ?? 'Error';
+        } else if (errorText.contains('пароль') || errorText.contains('password')) {
+          isWrongPassword = true;
+        }
+
+        if (isWrongPassword) {
+          final pwController = TextEditingController();
+          showDialog(
+            context: context,
+            barrierDismissible: false,
+            builder: (ctx) => AlertDialog(
+              backgroundColor: const Color(0xFF161426),
+              title: Text(_locale == 'ru' ? 'Приватная комната' : 'Private Room', style: const TextStyle(color: Color(0xFF00F2FE))),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(_locale == 'ru' ? 'Введите правильный пароль:' : 'Enter correct password:', style: const TextStyle(color: Colors.white)),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: pwController,
+                    style: const TextStyle(color: Colors.white),
+                    decoration: InputDecoration(
+                      filled: true,
+                      fillColor: Colors.black26,
+                      hintText: _locale == 'ru' ? 'Пароль' : 'Password',
+                      hintStyle: const TextStyle(color: Colors.white54),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    _isDisposed = true;
+                    _socket.disconnect();
+                    if (mounted) Navigator.pop(context);
+                  },
+                  child: Text(_locale == 'ru' ? 'Отмена' : 'Cancel', style: const TextStyle(color: Colors.white54)),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    _socket.emit('join-room', {
+                      'roomId': widget.roomId,
+                      'username': widget.username,
+                      'password': pwController.text.trim(),
+                    });
+                  },
+                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00F2FE)),
+                  child: Text(_locale == 'ru' ? 'Войти' : 'Join', style: const TextStyle(color: Colors.black)),
+                ),
+              ],
+            ),
+          );
+          return;
+        }
+
+        _isDisposed = true; // Stop other connections from firing
+        _socket.disconnect();
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: const Color(0xFF161426),
+            title: Text(_locale == 'ru' ? 'Ошибка' : 'Error', style: const TextStyle(color: Colors.redAccent)),
+            content: Text(errorText, style: const TextStyle(color: Colors.white)),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  if (mounted) Navigator.pop(context);
+                },
+                child: const Text('OK', style: TextStyle(color: Color(0xFF00F2FE))),
+              ),
+            ],
+          ),
+        );
       });
     });
 
@@ -1509,8 +1675,19 @@ class _RoomPageState extends State<RoomPage> {
     String finalUrl = url.trim();
     String finalName = name.trim().isEmpty ? 'Web Stream' : name.trim();
     
-    final lowercaseUrl = url.toLowerCase();
+    final lowercaseUrl = finalUrl.toLowerCase();
     final isWebLink = lowercaseUrl.startsWith('http://') || lowercaseUrl.startsWith('https://');
+    
+    if (!isWebLink) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_locale == 'ru' ? 'Неверный формат ссылки. Введите корректный URL (http:// или https://).' : 'Invalid URL format. Please enter a valid HTTP/HTTPS link.'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+      return;
+    }
     
     Map<String, dynamic>? finalHeaders;
 
@@ -2035,6 +2212,135 @@ class _RoomPageState extends State<RoomPage> {
 
   // File picker handler: chooses local file and uploads it to Node server
   // Local file picker removed due to Android build issues with file_picker
+
+  Future<void> _startBrowserBroadcast() async {
+    try {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final port = server.port;
+      final serverUrl = widget.serverUrl ?? 'https://ravestreamerserver.onrender.com';
+      final html = '''
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>RaveStreamer - Стрим из вкладки</title>
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <style>
+    body { background: #161426; color: white; font-family: sans-serif; text-align: center; margin-top: 50px; }
+    button { padding: 15px 30px; font-size: 18px; background: #00F2FE; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; }
+    button:hover { opacity: 0.8; }
+    #status { margin-top: 20px; font-size: 16px; color: #aaa; }
+    video { max-width: 80%; margin-top: 20px; border: 2px solid #00F2FE; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <h2>Трансляция вкладки для RaveStreamer</h2>
+  <p>Нажмите кнопку ниже, выберите <b>Вкладка Chrome / Edge</b> и поставьте галочку <b>Также поделиться аудио вкладки</b>!</p>
+  <button id="startBtn">Начать трансляцию вкладки</button>
+  <div id="status">Ожидание...</div>
+  <video id="preview" autoplay muted></video>
+
+  <script>
+    const socket = io('\${serverUrl}');
+    const roomId = '\${widget.roomId}';
+    const password = '\${widget.password ?? ''}';
+    const username = '\${widget.username}_web';
+    let localStream;
+    let peerConnections = {};
+
+    const config = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+      ]
+    };
+
+    socket.on('connect', () => {
+      document.getElementById('status').innerText = 'Подключено к серверу, нажмите кнопку чтобы выбрать вкладку.';
+    });
+
+    document.getElementById('startBtn').onclick = async () => {
+      try {
+        localStream = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: true // Захват аудио вкладки
+        });
+        
+        document.getElementById('preview').srcObject = localStream;
+        document.getElementById('status').innerText = 'Трансляция идет! Теперь это окно можно свернуть.';
+        document.getElementById('startBtn').style.display = 'none';
+
+        // Join room
+        socket.emit('join-room', { roomId, username, password });
+        socket.emit('start-stream', { roomId });
+
+      } catch (err) {
+        document.getElementById('status').innerText = 'Ошибка: ' + err.message;
+      }
+    };
+
+    socket.on('room-users', async (users) => {
+      if (!localStream) return;
+      for (const user of users) {
+        if (user.id !== socket.id && !peerConnections[user.id]) {
+          await createOffer(user.id);
+        }
+      }
+    });
+
+    async function createOffer(targetId) {
+      const pc = new RTCPeerConnection(config);
+      peerConnections[targetId] = pc;
+      
+      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+      
+      pc.onicecandidate = e => {
+        if (e.candidate) {
+          socket.emit('webrtc-ice-candidate', { targetId, candidate: e.candidate, roomId });
+        }
+      };
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      
+      socket.emit('webrtc-offer', { targetId, offer, roomId });
+    }
+
+    socket.on('webrtc-answer', async (data) => {
+      if (data.targetId === socket.id && peerConnections[data.senderId]) {
+        await peerConnections[data.senderId].setRemoteDescription(new RTCSessionDescription(data.answer));
+      }
+    });
+
+    socket.on('webrtc-ice-candidate', async (data) => {
+      if (data.targetId === socket.id && peerConnections[data.senderId]) {
+        await peerConnections[data.senderId].addIceCandidate(new RTCIceCandidate(data.candidate));
+      }
+    });
+
+    localStream?.getVideoTracks()[0]?.addEventListener('ended', () => {
+      socket.emit('stop-stream', { roomId });
+      window.close();
+    });
+  </script>
+</body>
+</html>
+      ''';
+
+      server.listen((HttpRequest request) {
+        request.response.headers.contentType = ContentType.html;
+        request.response.write(html);
+        request.response.close();
+      });
+
+      final url = Uri.parse('http://127.0.0.1:\$port/');
+      if (await canLaunchUrl(url)) {
+        await launchUrl(url, mode: LaunchMode.externalApplication);
+      }
+    } catch (e) {
+      debugPrint("Error starting browser broadcast: \$e");
+    }
+  }
   void _triggerControlsVisibility() {
     setState(() {
       _showControls = true;
@@ -2079,7 +2385,7 @@ class _RoomPageState extends State<RoomPage> {
                 borderRadius: BorderRadius.circular(6),
               ),
               child: Text(
-                'v1.1.0',
+                'v1.1.1',
                 style: TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.5), fontWeight: FontWeight.bold),
               ),
             ),
@@ -2174,7 +2480,7 @@ class _RoomPageState extends State<RoomPage> {
                           child: _buildVideoControlsOverlay(),
                         ),
                         // Show placeholder when no video is loaded
-                        if (_currentVideoUrl.isEmpty)
+                        if (_currentVideoUrl.isEmpty && !_isLiveStreaming)
                           _buildEmptyState(),
                       ],
                     ),
@@ -2574,6 +2880,23 @@ class _RoomPageState extends State<RoomPage> {
                       padding: const EdgeInsets.symmetric(vertical: 12),
                     ),
                   ),
+                  const SizedBox(height: 8),
+                  if (widget.isHost)
+                    ElevatedButton.icon(
+                      onPressed: () {
+                        _startBrowserBroadcast();
+                      },
+                      icon: const Icon(Icons.tab, size: 18),
+                      label: Text(
+                        _locale == 'ru' ? 'Трансляция из вкладки' : 'Stream Browser Tab',
+                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF6C63FF),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -3130,6 +3453,133 @@ class _RoomPageState extends State<RoomPage> {
                       _chatFontSize = val;
                     });
                     widget.onChatFontSizeChange(val);
+                  },
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          
+          // Check for updates button
+          _buildCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      _locale == 'ru' ? 'Версия приложения' : 'App Version',
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF6C63FF).withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        'v1.1.4',
+                        style: TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.5), fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                StatefulBuilder(
+                  builder: (ctx, setLocalState) {
+                    bool _isChecking = false;
+                    return ElevatedButton.icon(
+                      onPressed: _isChecking ? null : () async {
+                        setLocalState(() => _isChecking = true);
+                        try {
+                          final gistRawUrl =
+                              'https://gist.githubusercontent.com/stepa1235/0811a2ec6e74b06965de32f61643da5b/raw/ravestreamer.json?t=${DateTime.now().millisecondsSinceEpoch}';
+                          final response = await http.get(Uri.parse(gistRawUrl)).timeout(const Duration(seconds: 8));
+                          if (response.statusCode == 200) {
+                            final jsonData = jsonDecode(response.body) as Map<String, dynamic>;
+                            final latestVersion = jsonData['latest_version'] as String? ?? '';
+                            const currentVersion = '1.1.4';
+                            if (latestVersion.isNotEmpty && latestVersion != currentVersion) {
+                              String downloadUrl = '';
+                              if (Platform.isAndroid) {
+                                downloadUrl = jsonData['android_url'] as String? ?? '';
+                              } else if (Platform.isWindows) {
+                                downloadUrl = jsonData['windows_url'] as String? ?? '';
+                              }
+                              if (!mounted) return;
+                              showDialog(
+                                context: context,
+                                builder: (ctx) => AlertDialog(
+                                  backgroundColor: const Color(0xFF161426),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                  title: Text(_locale == 'ru' ? 'Доступно обновление! 🚀' : 'Update Available! 🚀',
+                                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                                  content: Text(
+                                    _locale == 'ru'
+                                        ? 'Доступна новая версия v$latestVersion (текущая v1.1.2).\nХотите обновиться?'
+                                        : 'A new version v$latestVersion is available (current v1.1.2).\nDo you want to update?',
+                                    style: const TextStyle(color: Colors.white70),
+                                  ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () => Navigator.of(ctx).pop(),
+                                      child: Text(_locale == 'ru' ? 'Позже' : 'Later',
+                                        style: const TextStyle(color: Colors.white54)),
+                                    ),
+                                    TextButton(
+                                      onPressed: () async {
+                                        Navigator.of(ctx).pop();
+                                        if (downloadUrl.isNotEmpty) {
+                                          try {
+                                            await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
+                                          } catch (e) {
+                                            debugPrint('Could not launch update URL: $e');
+                                          }
+                                        }
+                                      },
+                                      child: Text(_locale == 'ru' ? 'Обновить' : 'Update',
+                                        style: const TextStyle(color: Color(0xFF00F2FE), fontWeight: FontWeight.bold)),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            } else {
+                              if (!mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                                content: Text(_locale == 'ru' ? 'У вас установлена последняя версия ($currentVersion).' : 'You have the latest version ($currentVersion).'),
+                                backgroundColor: Colors.green,
+                              ));
+                            }
+                          } else {
+                            throw Exception('HTTP ${response.statusCode}');
+                          }
+                        } catch (e) {
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                            content: Text(_locale == 'ru' ? 'Не удалось проверить обновления: $e' : 'Could not check for updates: $e'),
+                            backgroundColor: Colors.redAccent,
+                          ));
+                        } finally {
+                          setLocalState(() => _isChecking = false);
+                        }
+                      },
+                      icon: _isChecking
+                          ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          : const Icon(Icons.system_update_alt, size: 14),
+                      label: Text(
+                        _isChecking
+                            ? (_locale == 'ru' ? 'Проверка...' : 'Checking...')
+                            : (_locale == 'ru' ? 'Проверить обновления' : 'Check for Updates'),
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF6C63FF),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    );
                   },
                 ),
               ],
