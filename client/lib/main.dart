@@ -337,8 +337,8 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
           ),
           content: Text(
             _locale == 'ru'
-                ? 'Доступна новая версия RaveStreamer v$version (текущая v1.0.2).\nХотите обновиться?'
-                : 'A new version of RaveStreamer v$version is available (current v1.0.2).\nDo you want to update?',
+                ? 'Доступна новая версия RaveStreamer v$version (текущая v1.1.0).\nХотите обновиться?'
+                : 'A new version of RaveStreamer v$version is available (current v1.1.0).\nDo you want to update?',
             style: const TextStyle(color: Colors.white70),
           ),
           actions: [
@@ -789,7 +789,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
                 border: Border.all(color: Colors.white.withOpacity(0.1)),
               ),
               child: Text(
-                'v1.0.2',
+                'v1.1.0',
                 style: TextStyle(
                   color: Colors.white.withOpacity(0.6),
                   fontSize: 11,
@@ -2079,7 +2079,7 @@ class _RoomPageState extends State<RoomPage> {
                 borderRadius: BorderRadius.circular(6),
               ),
               child: Text(
-                'v1.0.2',
+                'v1.1.0',
                 style: TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.5), fontWeight: FontWeight.bold),
               ),
             ),
