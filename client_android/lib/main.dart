@@ -13,6 +13,7 @@ import 'package:http/http.dart' as http;
 import 'package:window_manager/window_manager.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart' hide Video;
 import 'package:url_launcher/url_launcher.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:open_filex/open_filex.dart';
 
 const Map<String, Map<String, String>> _localizedValues = {
@@ -116,14 +117,28 @@ const Map<String, Map<String, String>> _localizedValues = {
   }
 };
 
+Future<String> _getSettingsPath() async {
+  if (Platform.isWindows) {
+    return 'C:\\RaveStreamer\\settings.json';
+  }
+  final dir = await getApplicationDocumentsDirectory();
+  return '${dir.path}/ravestreamer_settings.json';
+}
+
 Future<void> saveSettings(Map<String, dynamic> settings) async {
   try {
-    final dir = Directory('C:\\RaveStreamer');
-    if (!await dir.exists()) {
-      await dir.create(recursive: true);
+    if (Platform.isWindows) {
+      final dir = Directory('C:\\RaveStreamer');
+      if (!await dir.exists()) await dir.create(recursive: true);
     }
-    final file = File('C:\\RaveStreamer\\settings.json');
-    await file.writeAsString(jsonEncode(settings));
+    final path = await _getSettingsPath();
+    final file = File(path);
+    Map<String, dynamic> existing = {};
+    if (await file.exists()) {
+      try { existing = jsonDecode(await file.readAsString()) as Map<String, dynamic>; } catch(_) {}
+    }
+    existing.addAll(settings);
+    await file.writeAsString(jsonEncode(existing));
   } catch (e) {
     debugPrint('Error saving settings: $e');
   }
@@ -131,7 +146,8 @@ Future<void> saveSettings(Map<String, dynamic> settings) async {
 
 Future<Map<String, dynamic>> loadSettings() async {
   try {
-    final file = File('C:\\RaveStreamer\\settings.json');
+    final path = await _getSettingsPath();
+    final file = File(path);
     if (await file.exists()) {
       final content = await file.readAsString();
       return jsonDecode(content) as Map<String, dynamic>;
@@ -297,10 +313,11 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
     }
   }
 
-  Future<void> _fetchVersionFromServer(String serverUrl, {bool verbose = false}) async {
+  Future<void> _fetchVersionFromServer(String dummy, {bool verbose = false}) async {
     try {
+      final gistRawUrl = 'https://gist.githubusercontent.com/stepa1235/0811a2ec6e74b06965de32f61643da5b/raw/ravestreamer.json?t=${DateTime.now().millisecondsSinceEpoch}';
       final res = await http.get(
-        Uri.parse('$serverUrl/version'),
+        Uri.parse(gistRawUrl),
         headers: {'Cache-Control': 'no-cache'},
       ).timeout(const Duration(seconds: 6));
 
@@ -310,7 +327,7 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
         return;
       }
     } catch (e) {
-      debugPrint('Could not fetch version from server $serverUrl: $e');
+      debugPrint('Could not fetch version from Gist: $e');
     }
     if (verbose && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -324,7 +341,7 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
   void _checkForUpdates(Map<String, dynamic> jsonData, {bool verbose = false}) {
     if (!jsonData.containsKey('latest_version')) return;
     final latestVersion = jsonData['latest_version'] as String;
-    const String currentVersion = '1.0.13';
+    const String currentVersion = '1.1.4';
 
     if (latestVersion != currentVersion) {
       String downloadUrl = '';
@@ -661,7 +678,9 @@ class _ConnectionPageState extends State<ConnectionPage> {
   late final TextEditingController _serverController;
   late final TextEditingController _usernameController;
   final _roomController = TextEditingController(text: 'lobby');
+  final _passwordController = TextEditingController();
   bool _isConnecting = false;
+  bool _isPrivateRoom = false;
   String? _errorMessage;
 
 
@@ -681,6 +700,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
     _serverController.dispose();
     _usernameController.dispose();
     _roomController.dispose();
+    _passwordController.dispose();
     super.dispose();
   }
 
@@ -737,6 +757,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
           serverUrl: serverUrl,
           username: username,
           roomId: roomId,
+          password: _isPrivateRoom ? _passwordController.text.trim() : null,
           locale: widget.locale,
           onLocaleChange: widget.onLocaleChange,
           themeName: widget.themeName,
@@ -893,7 +914,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
                         children: [
                           Icon(Icons.system_update, size: 16, color: Color(0xFF00F2FE)),
                           SizedBox(width: 8),
-                          Text('Автообновление (v1.0.13)', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+                          Text('Автообновление (v1.1.4)', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
                         ],
                       ),
                       ElevatedButton(
@@ -907,30 +928,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
                     ],
                   ),
                 ),
-                const SizedBox(height: 12),
-
-                // Server URL Input Card
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(12)),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(widget.locale == 'ru' ? 'Адрес сервера' : 'Server Address', style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
-                      const SizedBox(height: 6),
-                      TextField(
-                        controller: _serverController,
-                        style: const TextStyle(color: Colors.white, fontSize: 12),
-                        decoration: InputDecoration(
-                          filled: true,
-                          fillColor: Colors.black26,
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+                // Server Address Input removed on Android
               ],
             ),
           ),
@@ -939,10 +937,11 @@ class _ConnectionPageState extends State<ConnectionPage> {
     );
   }
 
-  Future<void> _fetchVersionFromServer(String serverUrl, {bool verbose = false}) async {
+  Future<void> _fetchVersionFromServer(String dummy, {bool verbose = false}) async {
     try {
+      final gistRawUrl = 'https://gist.githubusercontent.com/stepa1235/0811a2ec6e74b06965de32f61643da5b/raw/ravestreamer.json?t=${DateTime.now().millisecondsSinceEpoch}';
       final res = await http.get(
-        Uri.parse('$serverUrl/version'),
+        Uri.parse(gistRawUrl),
         headers: {'Cache-Control': 'no-cache'},
       ).timeout(const Duration(seconds: 6));
 
@@ -952,7 +951,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
         return;
       }
     } catch (e) {
-      debugPrint('Could not fetch version from server $serverUrl: $e');
+      debugPrint('Could not fetch version from Gist: $e');
     }
     if (verbose && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -982,7 +981,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
   void _checkForUpdates(Map<String, dynamic> jsonData, {bool verbose = false}) {
     if (!jsonData.containsKey('latest_version')) return;
     final latestVersion = jsonData['latest_version'] as String;
-    const String currentVersion = '1.0.13';
+    const String currentVersion = '1.1.4';
 
     if (_isNewerVersion(latestVersion, currentVersion)) {
       String downloadUrl = '';
@@ -1347,7 +1346,51 @@ class _ConnectionPageState extends State<ConnectionPage> {
                           FilteringTextInputFormatter.allow(RegExp(r'[a-zA-Z0-9]')),
                         ],
                       ),
+                      const SizedBox(height: 16),
+                      
+                      // Private Room Switch
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(
+                                _isPrivateRoom ? Icons.lock_outline : Icons.lock_open,
+                                size: 18,
+                                color: _isPrivateRoom ? const Color(0xFF00F2FE) : Colors.white54,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                widget.locale == 'ru' ? 'Приватная комната' : 'Private Room',
+                                style: TextStyle(
+                                  color: _isPrivateRoom ? Colors.white : Colors.white54,
+                                  fontSize: 14,
+                                ),
+                              ),
+                            ],
+                          ),
+                          Switch(
+                            value: _isPrivateRoom,
+                            activeColor: const Color(0xFF00F2FE),
+                            onChanged: (val) {
+                              setState(() {
+                                _isPrivateRoom = val;
+                              });
+                            },
+                          ),
+                        ],
+                      ),
+                      if (_isPrivateRoom) ...[
+                        const SizedBox(height: 12),
+                        _buildTextField(
+                          controller: _passwordController,
+                          label: widget.locale == 'ru' ? 'ПАРОЛЬ КОМНАТЫ' : 'ROOM PASSWORD',
+                          icon: Icons.password,
+                          hint: widget.locale == 'ru' ? 'Введите пароль' : 'Enter password',
+                        ),
+                      ],
                       const SizedBox(height: 24),
+
 
                       // Error message container
                       if (_errorMessage != null) ...[
@@ -1418,7 +1461,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
                 border: Border.all(color: Colors.white.withOpacity(0.1)),
               ),
               child: Text(
-                'v1.0.13',
+                'v1.1.4',
                 style: TextStyle(
                   color: Colors.white.withOpacity(0.6),
                   fontSize: 11,
@@ -1470,6 +1513,7 @@ class RoomPage extends StatefulWidget {
   final String serverUrl;
   final String username;
   final String roomId;
+  final String? password;
   final String locale;
   final ValueChanged<String> onLocaleChange;
   final String themeName;
@@ -1483,6 +1527,7 @@ class RoomPage extends StatefulWidget {
     required this.serverUrl,
     required this.username,
     required this.roomId,
+    this.password,
     required this.locale,
     required this.onLocaleChange,
     required this.themeName,
@@ -1610,7 +1655,96 @@ class _RoomPageState extends State<RoomPage> {
       _socket.emit('join-room', {
         'roomId': widget.roomId,
         'username': widget.username,
-      });
+        if (widget.password != null && widget.password!.isNotEmpty) 'password': widget.password,
+    });
+
+    _socket.on('room-error', (msg) {
+      if (!mounted || _isDisposed) return;
+      
+      bool isWrongPassword = false;
+      String errorText = msg.toString();
+      
+      if (msg is Map) {
+        if (msg['type'] == 'WRONG_PASSWORD') isWrongPassword = true;
+        errorText = msg['message']?.toString() ?? 'Error';
+      } else if (errorText.contains('пароль') || errorText.contains('password')) {
+        isWrongPassword = true;
+      }
+
+      if (isWrongPassword) {
+        final pwController = TextEditingController();
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: const Color(0xFF161426),
+            title: Text(widget.locale == 'ru' ? 'Приватная комната' : 'Private Room', style: const TextStyle(color: Color(0xFF00F2FE))),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(widget.locale == 'ru' ? 'Введите правильный пароль:' : 'Enter correct password:', style: const TextStyle(color: Colors.white)),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: pwController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    filled: true,
+                    fillColor: Colors.black26,
+                    hintText: widget.locale == 'ru' ? 'Пароль' : 'Password',
+                    hintStyle: const TextStyle(color: Colors.white54),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  _isDisposed = true;
+                  _socket.disconnect();
+                  if (mounted) Navigator.pop(context);
+                },
+                child: Text(widget.locale == 'ru' ? 'Отмена' : 'Cancel', style: const TextStyle(color: Colors.white54)),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  _socket.emit('join-room', {
+                    'roomId': widget.roomId,
+                    'username': widget.username,
+                    'password': pwController.text.trim(),
+                  });
+                },
+                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00F2FE)),
+                child: Text(widget.locale == 'ru' ? 'Войти' : 'Join', style: const TextStyle(color: Colors.black)),
+              ),
+            ],
+          ),
+        );
+        return;
+      }
+
+      _isDisposed = true;
+      _socket.disconnect();
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: const Color(0xFF161426),
+          title: Text(widget.locale == 'ru' ? 'Ошибка' : 'Error', style: const TextStyle(color: Colors.redAccent)),
+          content: Text(errorText, style: const TextStyle(color: Colors.white)),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                if (mounted) Navigator.pop(context);
+              },
+              child: const Text('OK', style: TextStyle(color: Color(0xFF00F2FE))),
+            ),
+          ],
+        ),
+      );
     });
 
     _socket.onDisconnect((_) {
@@ -2578,7 +2712,7 @@ class _RoomPageState extends State<RoomPage> {
                 borderRadius: BorderRadius.circular(6),
               ),
               child: Text(
-                'v1.0.13',
+                'v1.1.4',
                 style: TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.5), fontWeight: FontWeight.bold),
               ),
             ),
@@ -3705,7 +3839,7 @@ class _RoomPageState extends State<RoomPage> {
                     Icon(Icons.system_update, size: 16, color: Color(0xFF00F2FE)),
                     SizedBox(width: 8),
                     Text(
-                      'Автообновление (v1.0.13)',
+                      'Автообновление (v1.1.4)',
                       style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
                     ),
                   ],
@@ -3737,10 +3871,11 @@ class _RoomPageState extends State<RoomPage> {
     );
   }
 
-  Future<void> _fetchVersionFromServer(String serverUrl, {bool verbose = false}) async {
+  Future<void> _fetchVersionFromServer(String dummy, {bool verbose = false}) async {
     try {
+      final gistRawUrl = 'https://gist.githubusercontent.com/stepa1235/0811a2ec6e74b06965de32f61643da5b/raw/ravestreamer.json?t=${DateTime.now().millisecondsSinceEpoch}';
       final res = await http.get(
-        Uri.parse('$serverUrl/version'),
+        Uri.parse(gistRawUrl),
         headers: {'Cache-Control': 'no-cache'},
       ).timeout(const Duration(seconds: 6));
 
@@ -3750,7 +3885,7 @@ class _RoomPageState extends State<RoomPage> {
         return;
       }
     } catch (e) {
-      debugPrint('Could not fetch version from server $serverUrl: $e');
+      debugPrint('Could not fetch version from Gist: $e');
     }
     if (verbose && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -3780,7 +3915,7 @@ class _RoomPageState extends State<RoomPage> {
   void _checkForUpdates(Map<String, dynamic> jsonData, {bool verbose = false}) {
     if (!jsonData.containsKey('latest_version')) return;
     final latestVersion = jsonData['latest_version'] as String;
-    const String currentVersion = '1.0.13';
+    const String currentVersion = '1.1.4';
 
     if (_isNewerVersion(latestVersion, currentVersion)) {
       String downloadUrl = '';
