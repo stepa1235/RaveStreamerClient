@@ -7,11 +7,14 @@ import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart' show MediaKit;
 import 'package:webview_windows/webview_windows.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
-import 'package:file_picker/file_picker.dart';
 import 'package:http/http.dart' as http;
 import 'package:window_manager/window_manager.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart' hide Video;
 import 'package:url_launcher/url_launcher.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
+import 'screen_picker.dart';
+import 'webrtc_manager.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart' hide Webview;
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 const Map<String, Map<String, String>> _localizedValues = {
@@ -877,6 +880,10 @@ class _RoomPageState extends State<RoomPage> {
   bool _isIncomingUpdate = false;
   bool _isDisposed = false;
   bool _isSidebarVisible = true;
+  
+  // WebRTC
+  WebRTCManager? _webrtcManager;
+  bool _isLiveStreaming = false;
   List<dynamic> _queue = [];
   String _preferredQuality = 'Auto';
   List<dynamic> _translators = [];
@@ -965,7 +972,27 @@ class _RoomPageState extends State<RoomPage> {
       .build()
     );
 
+    _webrtcManager = WebRTCManager(
+      socket: _socket,
+      roomId: widget.roomId,
+      isHost: Platform.isWindows,
+    );
+    _webrtcManager!.onStreamStarted = () {
+      if (mounted) setState(() { _isLiveStreaming = true; });
+    };
+    _webrtcManager!.onStreamStopped = () {
+      if (mounted) setState(() { _isLiveStreaming = false; });
+    };
+    _webrtcManager!.initialize();
+
     _socket.connect();
+
+    _socket.on('stream-started', (_) {
+      if (mounted) setState(() { _isLiveStreaming = true; });
+    });
+    _socket.on('stream-stopped', (_) {
+      if (mounted) setState(() { _isLiveStreaming = false; });
+    });
 
     _socket.onConnect((_) {
       if (_isDisposed || !mounted) return;
@@ -990,6 +1017,17 @@ class _RoomPageState extends State<RoomPage> {
     // Handle user list updates
     _socket.on('room-users', (data) {
       if (_isDisposed || !mounted) return;
+      
+      if (_webrtcManager != null && _webrtcManager!.isHost && _isLiveStreaming) {
+        final currentIds = _users.map((u) => u['id'] as String).toSet();
+        for (var user in data) {
+          final id = user['id'] as String;
+          if (id != _socket.id && !currentIds.contains(id)) {
+            _webrtcManager!.createConnectionForViewer(id);
+          }
+        }
+      }
+      
       setState(() {
         _users = data;
       });
@@ -1004,9 +1042,11 @@ class _RoomPageState extends State<RoomPage> {
       final calculatedTime = (data['calculatedTime'] as num).toDouble();
       final queueData = data['queue'] as List<dynamic>? ?? [];
       final headers = data['headers'] as Map<String, dynamic>?;
+      final isLive = data['isLiveStreaming'] as bool? ?? false;
 
       setState(() {
         _queue = queueData;
+        _isLiveStreaming = isLive;
       });
 
       if (videoUrl.isNotEmpty) {
@@ -1994,28 +2034,7 @@ class _RoomPageState extends State<RoomPage> {
   }
 
   // File picker handler: chooses local file and uploads it to Node server
-  Future<void> _pickLocalFile() async {
-    try {
-      final result = await FilePicker.pickFiles(
-        type: FileType.video,
-        allowMultiple: false,
-      );
-
-      if (result != null && result.files.single.path != null) {
-        final filePath = result.files.single.path!;
-        final fileName = result.files.single.name;
-        
-        _uploadAndStreamLocalFile(filePath, fileName);
-      }
-    } catch (e) {
-      if (!mounted) return;
-      debugPrint('Error picking file: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('File picker error: $e'), backgroundColor: Colors.red),
-      );
-    }
-  }
-
+  // Local file picker removed due to Android build issues with file_picker
   void _triggerControlsVisibility() {
     setState(() {
       _showControls = true;
@@ -2137,9 +2156,14 @@ class _RoomPageState extends State<RoomPage> {
                     child: Stack(
                       fit: StackFit.expand,
                       children: [
-                        _playerReady && _mkPlayer != null && _mkPlayer!.controller.value.isInitialized
-                            ? Webview(_mkPlayer!.controller)
-                            : const Center(
+                        if (_isLiveStreaming)
+                          RTCVideoView(
+                            Platform.isWindows ? _webrtcManager!.localRenderer : _webrtcManager!.remoteRenderer,
+                            objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
+                          )
+                        else if (_playerReady && _mkPlayer != null && _mkPlayer!.controller.value.isInitialized)
+                            Webview(_mkPlayer!.controller)
+                        else const Center(
                                 child: CircularProgressIndicator(
                                   valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF6C63FF)),
                                 ),
@@ -2501,6 +2525,61 @@ class _RoomPageState extends State<RoomPage> {
             ),
           ),
           const SizedBox(height: 10),
+          
+          // WebRTC Screen Share Button (Windows Only)
+          if (Platform.isWindows && isMeHost) ...[
+            _buildCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    _locale == 'ru' ? 'Стриминг экрана (WebRTC)' : 'Screen Share (WebRTC)',
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 8),
+                  ElevatedButton.icon(
+                    onPressed: () {
+                      if (_isLiveStreaming) {
+                        _webrtcManager?.stopScreenShare();
+                      } else {
+                        showDialog(
+                          context: context,
+                          builder: (ctx) => Dialog(
+                            backgroundColor: Colors.transparent,
+                            child: ScreenPickerWidget(
+                              onSourceSelected: (sourceId, fps, res) {
+                                Navigator.pop(ctx);
+                                _webrtcManager?.startScreenShare(
+                                  sourceId: sourceId,
+                                  fps: fps,
+                                  height: res,
+                                  width: res == 1080 ? 1920 : (res == 720 ? 1280 : 854),
+                                );
+                              }
+                            ),
+                          ),
+                        );
+                      }
+                    },
+                    icon: Icon(_isLiveStreaming ? Icons.stop_screen_share : Icons.screen_share, size: 18),
+                    label: Text(
+                      _isLiveStreaming 
+                        ? (_locale == 'ru' ? 'Остановить стрим' : 'Stop Stream')
+                        : (_locale == 'ru' ? 'Начать стрим экрана' : 'Share Screen'),
+                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _isLiveStreaming ? Colors.redAccent : const Color(0xFF00F2FE),
+                      foregroundColor: Colors.black,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 10),
+          ],
+          
           // Remote Video Link Form
           _buildCard(
             child: Column(
@@ -3108,13 +3187,7 @@ class _RoomPageState extends State<RoomPage> {
                 child: Text(
                   '${_loc('video')}$_currentVideoName',
                   style: TextStyle(fontSize: 12, color: Colors.white.withOpacity(0.6)),
-                  overflow: TextOverflow.ellipsis,
                 ),
-              ),
-              TextButton.icon(
-                onPressed: _pickLocalFile,
-                icon: const Icon(Icons.folder_open, size: 14),
-                label: Text(_loc('chooseVideoFile'), style: const TextStyle(fontSize: 11)),
               ),
               TextButton.icon(
                 onPressed: _showChatDialog,
