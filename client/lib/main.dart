@@ -9,6 +9,7 @@ import 'package:webview_windows/webview_windows.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'package:http/http.dart' as http;
 import 'package:window_manager/window_manager.dart';
+import 'package:local_notifier/local_notifier.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart' hide Video;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -171,6 +172,7 @@ void main() async {
   }
   if (Platform.isWindows) {
     await windowManager.ensureInitialized();
+      await localNotifier.setup(appName: 'RaveStreamer');
     try {
       await WebviewController.initializeEnvironment(
         additionalArguments: '--disable-web-security --autoplay-policy=no-user-gesture-required',
@@ -238,6 +240,7 @@ class RaveStreamerApp extends StatefulWidget {
 }
 
 class _RaveStreamerAppState extends State<RaveStreamerApp> {
+  final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   String _locale = 'ru';
   String _themeName = 'Dark';
   double _chatFontSize = 12.0;
@@ -318,7 +321,7 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
   void _checkForUpdates(Map<String, dynamic> jsonData) {
     if (!jsonData.containsKey('latest_version')) return;
     final latestVersion = jsonData['latest_version'] as String;
-    const String currentVersion = '1.1.4';
+    const String currentVersion = '1.1.17';
 
     if (latestVersion != currentVersion) {
       String downloadUrl = '';
@@ -338,6 +341,9 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
 
   void _showUpdateDialog(String version, String downloadUrl) {
     final activeTheme = _themes[_themeName] ?? _themes['Dark']!;
+    final context = _navigatorKey.currentContext;
+    if (context == null) return;
+    
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -354,8 +360,8 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
           ),
           content: Text(
             _locale == 'ru'
-                ? 'Доступна новая версия RaveStreamer v$version (текущая v1.1.2).\nХотите обновиться?'
-                : 'A new version of RaveStreamer v$version is available (current v1.1.4).\nDo you want to update?',
+                ? 'Доступна новая версия RaveStreamer v$version (текущая 1.1.17).\nХотите обновиться?'
+                : 'A new version of RaveStreamer v$version is available (current 1.1.17).\nDo you want to update?',
             style: const TextStyle(color: Colors.white70),
           ),
           actions: [
@@ -366,33 +372,151 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
                 style: const TextStyle(color: Colors.white54),
               ),
             ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: activeTheme.primary,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8.0),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: activeTheme.primary,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8.0),
+                  ),
+                ),
+                icon: const Icon(Icons.downloading, size: 16),
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  _downloadAndInstallUpdateWindows(downloadUrl, version);
+                },
+                label: Text(
+                  _locale == 'ru' ? 'Авто-Обновление v$version' : 'Auto-Install v$version',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
                 ),
               ),
-              onPressed: () async {
-                Navigator.of(context).pop();
-                try {
-                  final uri = Uri.parse(downloadUrl);
-                  await launchUrl(uri, mode: LaunchMode.externalApplication);
-                } catch (e) {
-                  debugPrint('Could not launch update URL: $e');
-                }
-              },
-              child: Text(
-                _locale == 'ru' ? 'Обновить' : 'Update',
-                style: const TextStyle(fontWeight: FontWeight.bold),
+            ],
+          );
+        },
+      );
+    }
+
+    Future<void> _downloadAndInstallUpdateWindows(String downloadUrl, String version) async {
+      double progress = 0.0;
+      StateSetter? dialogSetState;
+      bool isDownloading = true;
+      String statusText = _locale == 'ru' ? 'Подключение к серверу...' : 'Connecting to server...';
+  
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogCtx) => StatefulBuilder(
+          builder: (context, setState) {
+            dialogSetState = setState;
+            return AlertDialog(
+              backgroundColor: const Color(0xFF161426),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+                side: const BorderSide(color: Color(0xFF00F2FE), width: 1),
               ),
-            ),
-          ],
+              title: Row(
+                children: [
+                  if (isDownloading)
+                    const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF00F2FE)))
+                  else
+                    const Icon(Icons.check_circle, color: Colors.green),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      _locale == 'ru' ? 'Обновление v$version' : 'Auto-Updating v$version',
+                      style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(statusText, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                  const SizedBox(height: 12),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                      value: progress > 0 ? progress : null,
+                      backgroundColor: Colors.white12,
+                      color: const Color(0xFF00F2FE),
+                      minHeight: 8,
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      );
+  
+      try {
+        final tempDir = Directory.systemTemp;
+        final zipPath = '${tempDir.path}\\RaveStreamer_Update.zip';
+        final zipFile = File(zipPath);
+        if (await zipFile.exists()) await zipFile.delete();
+  
+        if (dialogSetState != null) {
+          dialogSetState!(() {
+            statusText = _locale == 'ru' ? 'Скачивание обновления...' : 'Downloading update...';
+          });
+        }
+  
+        final request = await HttpClient().getUrl(Uri.parse(downloadUrl));
+        final response = await request.close();
+        final contentLength = response.contentLength;
+        
+        int downloaded = 0;
+        final sink = zipFile.openWrite();
+        
+        await for (var chunk in response) {
+          sink.add(chunk);
+          downloaded += chunk.length;
+          if (contentLength > 0 && dialogSetState != null) {
+            dialogSetState!(() {
+              progress = downloaded / contentLength;
+            });
+          }
+        }
+        await sink.flush();
+        await sink.close();
+  
+        if (dialogSetState != null) {
+          dialogSetState!(() {
+            isDownloading = false;
+            statusText = _locale == 'ru' ? 'Установка... Приложение будет перезапущено.' : 'Installing... App will restart.';
+          });
+        }
+  
+        await Future.delayed(const Duration(milliseconds: 1000));
+  
+        final scriptPath = '${tempDir.path}\\update_rave.ps1';
+        final currentExe = Platform.resolvedExecutable;
+        final exeDir = File(currentExe).parent.path;
+        
+        final psScript = '''
+Start-Sleep -Seconds 2
+Expand-Archive -Path "$zipPath" -DestinationPath "$exeDir" -Force
+Start-Process "$currentExe"
+''';
+        await File(scriptPath).writeAsString(psScript);
+        
+        await Process.start(
+          'powershell', 
+          ['-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', scriptPath], 
+          mode: ProcessStartMode.detached
         );
-      },
-    );
-  }
+        
+        exit(0);
+      } catch (e) {
+        debugPrint('Auto-download error: \$e');
+        if (mounted) Navigator.of(context).pop();
+        try {
+          await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
+        } catch (_) {}
+      }
+    }
 
 
   Future<void> _saveAllSettings() async {
@@ -450,6 +574,7 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
     final themeData = _themes[_themeName] ?? _themes['Dark']!;
 
     return MaterialApp(
+      navigatorKey: _navigatorKey,
       title: 'RaveStreamer',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
@@ -853,7 +978,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
                 border: Border.all(color: Colors.white.withOpacity(0.1)),
               ),
               child: Text(
-                'v1.1.4',
+                '1.1.17',
                 style: TextStyle(
                   color: Colors.white.withOpacity(0.6),
                   fontSize: 11,
@@ -940,6 +1065,7 @@ class _RoomPageState extends State<RoomPage> {
 
   // App states
   bool _isConnected = false;
+  bool _hasJoinedRoom = false;
   List<dynamic> _users = [];
   String _currentVideoUrl = '';
   String _currentVideoName = 'No Video Loaded';
@@ -1020,6 +1146,38 @@ class _RoomPageState extends State<RoomPage> {
     _initSocket();
     _syncTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
       _sendPeriodicSync();
+    });
+
+    // Connection timeout check
+    Timer(const Duration(seconds: 8), () {
+      if (mounted && !_hasJoinedRoom) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: const Color(0xFF2A2D3E),
+            title: Text(
+              _locale == 'ru' ? 'Ошибка подключения' : 'Connection Error',
+              style: const TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold),
+            ),
+            content: Text(
+              _locale == 'ru' 
+                ? 'Сервер недоступен или устарела ссылка Localtunnel.'
+                : 'Server is unreachable or Localtunnel link expired.',
+              style: const TextStyle(color: Colors.white70),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(ctx); // Close dialog
+                  if (mounted) Navigator.pop(context); // Go back to connection page
+                },
+                child: const Text('OK', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              ),
+            ],
+          ),
+        );
+      }
     });
   }
 
@@ -1195,7 +1353,7 @@ class _RoomPageState extends State<RoomPage> {
       }
       
       setState(() {
-        _users = data;
+        _users = (data as List).where((u) => !(u['username'] as String).endsWith('\u200B')).toList();
       });
     });
 
@@ -1211,6 +1369,7 @@ class _RoomPageState extends State<RoomPage> {
       final isLive = data['isLiveStreaming'] as bool? ?? false;
 
       setState(() {
+        _hasJoinedRoom = true;
         _queue = queueData;
         _isLiveStreaming = isLive;
       });
@@ -1235,6 +1394,52 @@ class _RoomPageState extends State<RoomPage> {
       if (_isDisposed || !mounted) return;
       setState(() {
         _queue = data['queue'] as List<dynamic>;
+      });
+    });
+
+    // Handle Chat Message Broadcast
+    _socket.on('chat-msg', (data) {
+      if (_isDisposed || !mounted) return;
+      
+      final sender = data['username'] as String;
+      final text = data['text'] as String;
+      
+      setState(() {
+        _messages.add({
+          'clientId': (data['clientId'] ?? '') as String,
+          'sender': sender,
+          'text': text,
+          'time': (data['timestamp'] ?? data['time'] ?? '') as String,
+        });
+      });
+      
+      // Notification
+      if (Platform.isWindows) {
+        windowManager.isFocused().then((isFocused) {
+          if (!isFocused && mounted) {
+            final notification = LocalNotification(
+              title: sender,
+              body: text,
+            );
+            notification.onShow = () {};
+            notification.onClose = (closeReason) {};
+            notification.onClick = () {
+              windowManager.show();
+            };
+            notification.show();
+          }
+        });
+      }
+      
+      // Scroll to bottom
+      Timer(const Duration(milliseconds: 100), () {
+        if (_chatScrollController.hasClients) {
+          _chatScrollController.animateTo(
+            _chatScrollController.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOut,
+          );
+        }
       });
     });
 
@@ -1265,29 +1470,6 @@ class _RoomPageState extends State<RoomPage> {
       final isPlaying = data['isPlaying'] as bool;
       final currentTime = (data['currentTime'] as num).toDouble();
       _handlePeriodicSync(isPlaying, currentTime);
-    });
-
-    // Handle Chat Message Broadcast
-    _socket.on('chat-msg', (data) {
-      if (_isDisposed || !mounted) return;
-      setState(() {
-        _messages.add({
-          'clientId': (data['clientId'] ?? '') as String,
-          'sender': data['username'] as String,
-          'text': data['text'] as String,
-          'time': (data['timestamp'] ?? data['time'] ?? '') as String,
-        });
-      });
-      // Scroll to bottom
-      Timer(const Duration(milliseconds: 100), () {
-        if (_chatScrollController.hasClients) {
-          _chatScrollController.animateTo(
-            _chatScrollController.position.maxScrollExtent,
-            duration: const Duration(milliseconds: 200),
-            curve: Curves.easeOut,
-          );
-        }
-      });
     });
 
     // Handle Chat History (e.g. on rejoin/reconnect)
@@ -2223,28 +2405,36 @@ class _RoomPageState extends State<RoomPage> {
 <html>
 <head>
   <meta charset="utf-8">
-  <title>RaveStreamer - Стрим из вкладки</title>
+  <title>RaveStreamer - Трансляция</title>
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
   <style>
-    body { background: #161426; color: white; font-family: sans-serif; text-align: center; margin-top: 50px; }
-    button { padding: 15px 30px; font-size: 18px; background: #00F2FE; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; }
-    button:hover { opacity: 0.8; }
-    #status { margin-top: 20px; font-size: 16px; color: #aaa; }
-    video { max-width: 80%; margin-top: 20px; border: 2px solid #00F2FE; border-radius: 8px; }
+    body { background-color: #161426; color: white; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; font-family: sans-serif; text-align: center; }
+    h2 { color: #00F2FE; }
+    .warning { background-color: #ff4444; padding: 15px; border-radius: 8px; font-weight: bold; margin: 15px 0; max-width: 600px; }
+    button { background: linear-gradient(90deg, #00F2FE 0%, #4FACFE 100%); color: #161426; font-weight: bold; border: none; padding: 15px 30px; font-size: 18px; border-radius: 30px; cursor: pointer; transition: transform 0.2s; }
+    button:hover { transform: scale(1.05); }
+    video { max-width: 80%; border: 2px solid #00F2FE; border-radius: 8px; margin-top: 20px; }
   </style>
 </head>
 <body>
   <h2>Трансляция вкладки для RaveStreamer</h2>
-  <p>Нажмите кнопку ниже, выберите <b>Вкладка Chrome / Edge</b> и поставьте галочку <b>Также поделиться аудио вкладки</b>!</p>
-  <button id="startBtn">Начать трансляцию вкладки</button>
-  <div id="status">Ожидание...</div>
+  
+  <div class="warning">
+    🛑 ВНИМАНИЕ: Откройте фильм в соседней вкладке ЗАРАНЕЕ.<br><br>
+    После нажатия на кнопку ниже появится окно выбора. Обязательно выберите вкладку, на которой открыт фильм (а НЕ эту вкладку).
+  </div>
+
+  <p>Выберите <b>Вкладка Chrome / Edge</b> и поставьте галочку <b>Также поделиться аудио вкладки</b>!</p>
+  
+  <button id="startBtn">Выбрать вкладку и начать</button>
+  <div id="status" style="margin-top: 15px; font-size: 16px;">Ожидание...</div>
   <video id="preview" autoplay muted></video>
 
   <script>
-    const socket = io('\${serverUrl}');
-    const roomId = '\${widget.roomId}';
-    const password = '\${widget.password ?? ''}';
-    const username = '\${widget.username}_web';
+    const socket = io('${serverUrl}');
+    const roomId = '${widget.roomId}';
+    const password = '${widget.password ?? ''}';
+    const username = '${widget.username}\u200B';
     let localStream;
     let peerConnections = {};
 
@@ -2263,7 +2453,7 @@ class _RoomPageState extends State<RoomPage> {
       try {
         localStream = await navigator.mediaDevices.getDisplayMedia({
           video: true,
-          audio: true // Захват аудио вкладки
+          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 2 }
         });
         
         document.getElementById('preview').srcObject = localStream;
@@ -2296,7 +2486,7 @@ class _RoomPageState extends State<RoomPage> {
       
       pc.onicecandidate = e => {
         if (e.candidate) {
-          socket.emit('webrtc-ice-candidate', { targetId, candidate: e.candidate, roomId });
+          socket.emit('webrtc-ice-candidate', { targetId, senderId: socket.id, candidate: e.candidate, roomId });
         }
       };
 
@@ -2322,6 +2512,11 @@ class _RoomPageState extends State<RoomPage> {
       socket.emit('stop-stream', { roomId });
       window.close();
     });
+
+    socket.on('stream-stopped', () => {
+      document.body.innerHTML = '<h2>Трансляция завершена</h2><p>Можете закрыть эту вкладку.</p>';
+      window.close();
+    });
   </script>
 </body>
 </html>
@@ -2333,12 +2528,12 @@ class _RoomPageState extends State<RoomPage> {
         request.response.close();
       });
 
-      final url = Uri.parse('http://127.0.0.1:\$port/');
+      final url = Uri.parse('http://127.0.0.1:$port/');
       if (await canLaunchUrl(url)) {
         await launchUrl(url, mode: LaunchMode.externalApplication);
       }
     } catch (e) {
-      debugPrint("Error starting browser broadcast: \$e");
+      debugPrint("Error starting browser broadcast: $e");
     }
   }
   void _triggerControlsVisibility() {
@@ -2357,6 +2552,15 @@ class _RoomPageState extends State<RoomPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (!_hasJoinedRoom) {
+      return const Scaffold(
+        backgroundColor: Color(0xFF161426),
+        body: Center(
+          child: CircularProgressIndicator(color: Color(0xFF00F2FE)),
+        ),
+      );
+    }
+
     final screenWidth = MediaQuery.of(context).size.width;
     final isDesktop = screenWidth > 800;
 
@@ -2385,7 +2589,7 @@ class _RoomPageState extends State<RoomPage> {
                 borderRadius: BorderRadius.circular(6),
               ),
               child: Text(
-                'v1.1.1',
+                '1.1.17',
                 style: TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.5), fontWeight: FontWeight.bold),
               ),
             ),
@@ -2464,7 +2668,7 @@ class _RoomPageState extends State<RoomPage> {
                       children: [
                         if (_isLiveStreaming)
                           RTCVideoView(
-                            Platform.isWindows ? _webrtcManager!.localRenderer : _webrtcManager!.remoteRenderer,
+                            (_webrtcManager!.isHost && _webrtcManager!.localStream != null) ? _webrtcManager!.localRenderer : _webrtcManager!.remoteRenderer,
                             objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
                           )
                         else if (_playerReady && _mkPlayer != null && _mkPlayer!.controller.value.isInitialized)
@@ -2881,18 +3085,25 @@ class _RoomPageState extends State<RoomPage> {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  if (widget.isHost)
+                  if (isMeHost)
                     ElevatedButton.icon(
                       onPressed: () {
-                        _startBrowserBroadcast();
+                        if (_isLiveStreaming) {
+                          _socket.emit('stop-stream', {'roomId': widget.roomId});
+                          _webrtcManager?.stopScreenShare();
+                        } else {
+                          _startBrowserBroadcast();
+                        }
                       },
-                      icon: const Icon(Icons.tab, size: 18),
+                      icon: Icon(_isLiveStreaming ? Icons.stop_screen_share : Icons.tab, size: 18),
                       label: Text(
-                        _locale == 'ru' ? 'Трансляция из вкладки' : 'Stream Browser Tab',
+                        _locale == 'ru' 
+                          ? (_isLiveStreaming ? 'Остановить стрим' : 'Трансляция из вкладки') 
+                          : (_isLiveStreaming ? 'Stop Stream' : 'Stream Browser Tab'),
                         style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
                       ),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF6C63FF),
+                        backgroundColor: _isLiveStreaming ? Colors.redAccent : const Color(0xFF6C63FF),
                         foregroundColor: Colors.white,
                         padding: const EdgeInsets.symmetric(vertical: 12),
                       ),
@@ -3479,7 +3690,7 @@ class _RoomPageState extends State<RoomPage> {
                         borderRadius: BorderRadius.circular(6),
                       ),
                       child: Text(
-                        'v1.1.4',
+                        '1.1.17',
                         style: TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.5), fontWeight: FontWeight.bold),
                       ),
                     ),
@@ -3499,7 +3710,7 @@ class _RoomPageState extends State<RoomPage> {
                           if (response.statusCode == 200) {
                             final jsonData = jsonDecode(response.body) as Map<String, dynamic>;
                             final latestVersion = jsonData['latest_version'] as String? ?? '';
-                            const currentVersion = '1.1.4';
+                            const currentVersion = '1.1.17';
                             if (latestVersion.isNotEmpty && latestVersion != currentVersion) {
                               String downloadUrl = '';
                               if (Platform.isAndroid) {
@@ -3547,7 +3758,7 @@ class _RoomPageState extends State<RoomPage> {
                             } else {
                               if (!mounted) return;
                               ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                                content: Text(_locale == 'ru' ? 'У вас установлена последняя версия ($currentVersion).' : 'You have the latest version ($currentVersion).'),
+                                content: Text(_locale == 'ru' ? 'У вас установлена последняя версия (1.1.17).' : 'You have the latest version (1.1.17).'),
                                 backgroundColor: Colors.green,
                               ));
                             }
@@ -4321,4 +4532,23 @@ const String _htmlPlayerCode = r'''
 </body>
 </html>
 ''';
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 

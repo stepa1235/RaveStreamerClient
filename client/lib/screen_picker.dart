@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'dart:io';
+import 'dart:convert';
 
 class ScreenPickerWidget extends StatefulWidget {
   final Function(String sourceId, int fps, int resolution) onSourceSelected;
@@ -27,6 +29,35 @@ class _ScreenPickerWidgetState extends State<ScreenPickerWidget> {
   void initState() {
     super.initState();
     _loadSources();
+    _loadSettings();
+  }
+
+  Future<void> _loadSettings() async {
+    try {
+      final file = File('C:\\RaveStreamer\\settings.json');
+      if (await file.exists()) {
+        final data = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+        if (mounted) {
+          setState(() {
+            if (data.containsKey('webrtcFps')) _selectedFps = data['webrtcFps'];
+            if (data.containsKey('webrtcRes')) _selectedResolution = data['webrtcRes'];
+          });
+        }
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _saveSettings() async {
+    try {
+      final file = File('C:\\RaveStreamer\\settings.json');
+      Map<String, dynamic> data = {};
+      if (await file.exists()) {
+        try { data = jsonDecode(await file.readAsString()) as Map<String, dynamic>; } catch(_) {}
+      }
+      data['webrtcFps'] = _selectedFps;
+      data['webrtcRes'] = _selectedResolution;
+      await file.writeAsString(jsonEncode(data));
+    } catch (_) {}
   }
 
   Future<void> _loadSources() async {
@@ -88,7 +119,10 @@ class _ScreenPickerWidgetState extends State<ScreenPickerWidget> {
                   child: Text(e.value),
                 )).toList(),
                 onChanged: (val) {
-                  if (val != null) setState(() => _selectedResolution = val);
+                  if (val != null) {
+                    setState(() => _selectedResolution = val);
+                    _saveSettings();
+                  }
                 },
               ),
               const SizedBox(width: 24),
@@ -103,7 +137,10 @@ class _ScreenPickerWidgetState extends State<ScreenPickerWidget> {
                   child: Text('$fps FPS'),
                 )).toList(),
                 onChanged: (val) {
-                  if (val != null) setState(() => _selectedFps = val);
+                  if (val != null) {
+                    setState(() => _selectedFps = val);
+                    _saveSettings();
+                  }
                 },
               ),
             ],

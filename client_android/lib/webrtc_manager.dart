@@ -55,9 +55,8 @@ class WebRTCManager {
       final mediaConstraints = {
         'audio': true, // Try to capture audio
         'video': {
+          'deviceId': {'exact': sourceId},
           'mandatory': {
-            'chromeMediaSource': 'desktop',
-            'chromeMediaSourceId': sourceId,
             'minFrameRate': fps.toString(),
             'minWidth': width.toString(),
             'minHeight': height.toString(),
@@ -65,13 +64,7 @@ class WebRTCManager {
         }
       };
 
-      try {
-        localStream = await navigator.mediaDevices.getDisplayMedia(mediaConstraints);
-      } catch (e) {
-        debugPrint('Failed to getDisplayMedia with audio, retrying without audio: $e');
-        mediaConstraints['audio'] = false;
-        localStream = await navigator.mediaDevices.getDisplayMedia(mediaConstraints);
-      }
+      localStream = await navigator.mediaDevices.getDisplayMedia(mediaConstraints);
       localRenderer.srcObject = localStream;
       
       socket.emit('start-stream', {'roomId': roomId});
@@ -136,62 +129,76 @@ class WebRTCManager {
   // --- VIEWER SPECIFIC ---
 
   Future<void> _handleOffer(data) async {
-    if (isHost && localStream != null) return; // Host shouldn't receive offers if natively streaming
-    
-    final senderId = data['senderId'];
-    final offerData = data['offer'];
-    
-    final pc = await createPeerConnection(configuration);
-    peerConnections[senderId] = pc;
+    try {
+      if (isHost && localStream != null) return; // Host shouldn't receive offers if natively streaming
+      
+      final senderId = data['senderId'];
+      final offerData = data['offer'];
+      
+      final pc = await createPeerConnection(configuration);
+      peerConnections[senderId] = pc;
 
-    pc.onIceCandidate = (candidate) {
-      socket.emit('webrtc-ice-candidate', {
+      pc.onIceCandidate = (candidate) {
+        socket.emit('webrtc-ice-candidate', {
+          'targetId': senderId,
+          'candidate': candidate.toMap(),
+          'roomId': roomId
+        });
+      };
+
+      pc.onTrack = (event) {
+        if (event.streams.isNotEmpty) {
+          remoteRenderer.srcObject = event.streams[0];
+        }
+        if (event.track.kind == 'video') {
+          onStreamStarted?.call();
+        }
+      };
+
+      await pc.setRemoteDescription(RTCSessionDescription(offerData['sdp'], offerData['type']));
+      
+      final answer = await pc.createAnswer({});
+      await pc.setLocalDescription(answer);
+
+      socket.emit('webrtc-answer', {
         'targetId': senderId,
-        'candidate': candidate.toMap(),
+        'answer': answer.toMap(),
         'roomId': roomId
       });
-    };
-
-    pc.onTrack = (event) {
-      if (event.track.kind == 'video') {
-        remoteRenderer.srcObject = event.streams[0];
-        onStreamStarted?.call();
-      }
-    };
-
-    await pc.setRemoteDescription(RTCSessionDescription(offerData['sdp'], offerData['type']));
-    
-    final answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-
-    socket.emit('webrtc-answer', {
-      'targetId': senderId,
-      'answer': answer.toMap(),
-      'roomId': roomId
-    });
+    } catch (e) {
+      print('Error handling WebRTC offer: $e');
+    }
   }
 
   Future<void> _handleAnswer(data) async {
-    final senderId = data['senderId'];
-    final answerData = data['answer'];
-    
-    final pc = peerConnections[senderId];
-    if (pc != null) {
-      await pc.setRemoteDescription(RTCSessionDescription(answerData['sdp'], answerData['type']));
+    try {
+      final senderId = data['senderId'];
+      final answerData = data['answer'];
+      
+      final pc = peerConnections[senderId];
+      if (pc != null) {
+        await pc.setRemoteDescription(RTCSessionDescription(answerData['sdp'], answerData['type']));
+      }
+    } catch (e) {
+      print('Error handling WebRTC answer: $e');
     }
   }
 
   Future<void> _handleIceCandidate(data) async {
-    final senderId = data['senderId'];
-    final candidateData = data['candidate'];
-    
-    final pc = peerConnections[senderId];
-    if (pc != null) {
-      await pc.addCandidate(RTCIceCandidate(
-        candidateData['candidate'],
-        candidateData['sdpMid'],
-        candidateData['sdpMLineIndex']
-      ));
+    try {
+      final senderId = data['senderId'];
+      final candidateData = data['candidate'];
+      
+      final pc = peerConnections[senderId];
+      if (pc != null && candidateData != null) {
+        await pc.addCandidate(RTCIceCandidate(
+          candidateData['candidate'],
+          candidateData['sdpMid'],
+          candidateData['sdpMLineIndex']
+        ));
+      }
+    } catch (e) {
+      print('Error handling WebRTC ICE candidate: $e');
     }
   }
 
@@ -210,4 +217,3 @@ class WebRTCManager {
     peerConnections.clear();
   }
 }
-

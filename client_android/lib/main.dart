@@ -15,6 +15,8 @@ import 'package:youtube_explode_dart/youtube_explode_dart.dart' hide Video;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:open_filex/open_filex.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart' hide Webview;
+import 'webrtc_manager.dart';
 
 const Map<String, Map<String, String>> _localizedValues = {
   'en': {
@@ -219,6 +221,7 @@ class RaveStreamerApp extends StatefulWidget {
 }
 
 class _RaveStreamerAppState extends State<RaveStreamerApp> {
+  final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   String _locale = 'ru';
   String _themeName = 'Dark';
   double _chatFontSize = 12.0;
@@ -341,7 +344,7 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
   void _checkForUpdates(Map<String, dynamic> jsonData, {bool verbose = false}) {
     if (!jsonData.containsKey('latest_version')) return;
     final latestVersion = jsonData['latest_version'] as String;
-    const String currentVersion = '1.1.4';
+    const String currentVersion = '1.1.17';
 
     if (latestVersion != currentVersion) {
       String downloadUrl = '';
@@ -363,8 +366,8 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
         SnackBar(
           content: Text(
             _locale == 'ru'
-                ? 'У вас установлена последняя версия v$currentVersion! ✨'
-                : 'You are using the latest version v$currentVersion! ✨',
+                ? 'У вас установлена последняя версия v1.1.18! ✨'
+                : 'You are using the latest version v1.1.18! ✨',
           ),
           backgroundColor: Colors.green,
         ),
@@ -374,6 +377,9 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
 
   void _showUpdateDialog(String version, String downloadUrl) {
     final activeTheme = _themes[_themeName] ?? _themes['Dark']!;
+    final context = _navigatorKey.currentContext;
+    if (context == null) return;
+    
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -506,7 +512,7 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
       final total = res.contentLength ?? 0;
       int received = 0;
 
-      final tempDir = Directory.systemTemp;
+      final tempDir = await getExternalStorageDirectory() ?? await getTemporaryDirectory();
       final apkPath = '${tempDir.path}/app-release.apk';
       final apkFile = File(apkPath);
       if (await apkFile.exists()) await apkFile.delete();
@@ -613,6 +619,7 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
     final themeData = _themes[_themeName] ?? _themes['Dark']!;
 
     return MaterialApp(
+      navigatorKey: _navigatorKey,
       title: 'RaveStreamer',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
@@ -914,7 +921,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
                         children: [
                           Icon(Icons.system_update, size: 16, color: Color(0xFF00F2FE)),
                           SizedBox(width: 8),
-                          Text('Автообновление (v1.1.4)', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+                          Text('О приложении (1.1.17)', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
                         ],
                       ),
                       ElevatedButton(
@@ -981,7 +988,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
   void _checkForUpdates(Map<String, dynamic> jsonData, {bool verbose = false}) {
     if (!jsonData.containsKey('latest_version')) return;
     final latestVersion = jsonData['latest_version'] as String;
-    const String currentVersion = '1.1.4';
+    const String currentVersion = '1.1.17';
 
     if (_isNewerVersion(latestVersion, currentVersion)) {
       String downloadUrl = '';
@@ -1003,8 +1010,8 @@ class _ConnectionPageState extends State<ConnectionPage> {
         SnackBar(
           content: Text(
             widget.locale == 'ru'
-                ? 'У вас установлена последняя версия v$currentVersion! ✨'
-                : 'You are using the latest version v$currentVersion! ✨',
+                ? 'У вас установлена последняя версия v1.1.18! ✨'
+                : 'You are using the latest version v1.1.18! ✨',
           ),
           backgroundColor: Colors.green,
         ),
@@ -1146,7 +1153,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
       final total = res.contentLength ?? 0;
       int received = 0;
 
-      final tempDir = Directory.systemTemp;
+      final tempDir = await getExternalStorageDirectory() ?? await getTemporaryDirectory();
       final apkPath = '${tempDir.path}/app-release.apk';
       final apkFile = File(apkPath);
       if (await apkFile.exists()) await apkFile.delete();
@@ -1461,7 +1468,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
                 border: Border.all(color: Colors.white.withOpacity(0.1)),
               ),
               child: Text(
-                'v1.1.4',
+                '1.1.17',
                 style: TextStyle(
                   color: Colors.white.withOpacity(0.6),
                   fontSize: 11,
@@ -1546,8 +1553,13 @@ class _RoomPageState extends State<RoomPage> {
   WebviewPlayer? _mkPlayer;
   bool _playerReady = false; // becomes true once player is initialized
 
+  // WebRTC
+  WebRTCManager? _webrtcManager;
+  bool _isLiveStreaming = false;
+
   // App states
   bool _isConnected = false;
+  bool _hasJoinedRoom = false;
   List<dynamic> _users = [];
   String _currentVideoUrl = '';
   String _currentVideoName = 'No Video Loaded';
@@ -1617,6 +1629,38 @@ class _RoomPageState extends State<RoomPage> {
     _syncTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
       _sendPeriodicSync();
     });
+
+    // Connection timeout check
+    Timer(const Duration(seconds: 8), () {
+      if (mounted && !_hasJoinedRoom) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: const Color(0xFF2A2D3E),
+            title: Text(
+              _locale == 'ru' ? 'Ошибка подключения' : 'Connection Error',
+              style: const TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold),
+            ),
+            content: Text(
+              _locale == 'ru' 
+                ? 'Сервер недоступен или устарела ссылка Localtunnel.'
+                : 'Server is unreachable or Localtunnel link expired.',
+              style: const TextStyle(color: Colors.white70),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(ctx); // Close dialog
+                  if (mounted) Navigator.pop(context); // Go back to connection page
+                },
+                child: const Text('OK', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              ),
+            ],
+          ),
+        );
+      }
+    });
   }
 
   @override
@@ -1644,6 +1688,19 @@ class _RoomPageState extends State<RoomPage> {
       .build()
     );
 
+    _webrtcManager = WebRTCManager(
+      socket: _socket,
+      roomId: widget.roomId,
+      isHost: false, // Android can't host streams yet
+    );
+    _webrtcManager!.onStreamStarted = () {
+      if (mounted) setState(() { _isLiveStreaming = true; });
+    };
+    _webrtcManager!.onStreamStopped = () {
+      if (mounted) setState(() { _isLiveStreaming = false; });
+    };
+    _webrtcManager!.initialize();
+
     _socket.connect();
 
     _socket.onConnect((_) {
@@ -1656,6 +1713,7 @@ class _RoomPageState extends State<RoomPage> {
         'roomId': widget.roomId,
         'username': widget.username,
         if (widget.password != null && widget.password!.isNotEmpty) 'password': widget.password,
+      });
     });
 
     _socket.on('room-error', (msg) {
@@ -1759,7 +1817,7 @@ class _RoomPageState extends State<RoomPage> {
     _socket.on('room-users', (data) {
       if (_isDisposed || !mounted) return;
       setState(() {
-        _users = data;
+        _users = (data as List).where((u) => !(u['username'] as String).endsWith('\u200B')).toList();
       });
     });
 
@@ -1772,9 +1830,12 @@ class _RoomPageState extends State<RoomPage> {
       final calculatedTime = (data['calculatedTime'] as num).toDouble();
       final queueData = data['queue'] as List<dynamic>? ?? [];
       final headers = data['headers'] as Map<String, dynamic>?;
+      final isLive = data['isLiveStreaming'] as bool? ?? false;
 
       setState(() {
+        _hasJoinedRoom = true;
         _queue = queueData;
+        _isLiveStreaming = isLive;
       });
 
       if (videoUrl.isNotEmpty) {
@@ -2683,6 +2744,15 @@ class _RoomPageState extends State<RoomPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (!_hasJoinedRoom) {
+      return const Scaffold(
+        backgroundColor: Color(0xFF161426),
+        body: Center(
+          child: CircularProgressIndicator(color: Color(0xFF00F2FE)),
+        ),
+      );
+    }
+
     final screenWidth = MediaQuery.of(context).size.width;
     final isDesktop = screenWidth > 800;
 
@@ -2712,7 +2782,7 @@ class _RoomPageState extends State<RoomPage> {
                 borderRadius: BorderRadius.circular(6),
               ),
               child: Text(
-                'v1.1.4',
+                '1.1.17',
                 style: TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.5), fontWeight: FontWeight.bold),
               ),
             ),
@@ -2805,13 +2875,19 @@ class _RoomPageState extends State<RoomPage> {
                     child: Stack(
                       fit: StackFit.expand,
                       children: [
-                        _playerReady && _mkPlayer != null && _mkPlayer!.isInitialized
-                            ? WebViewWidget(controller: _mkPlayer!.controller)
-                            : const Center(
-                                child: CircularProgressIndicator(
-                                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF6C63FF)),
-                                ),
-                              ),
+                        if (_isLiveStreaming && _webrtcManager != null)
+                          RTCVideoView(
+                            _webrtcManager!.remoteRenderer,
+                            objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
+                          )
+                        else if (_playerReady && _mkPlayer != null && _mkPlayer!.isInitialized)
+                          WebViewWidget(controller: _mkPlayer!.controller)
+                        else
+                          const Center(
+                            child: CircularProgressIndicator(
+                              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF6C63FF)),
+                            ),
+                          ),
                         AnimatedOpacity(
                           opacity: _showControls ? 1.0 : 0.0,
                           duration: const Duration(milliseconds: 300),
@@ -3839,7 +3915,7 @@ class _RoomPageState extends State<RoomPage> {
                     Icon(Icons.system_update, size: 16, color: Color(0xFF00F2FE)),
                     SizedBox(width: 8),
                     Text(
-                      'Автообновление (v1.1.4)',
+                      'О приложении (1.1.17)',
                       style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
                     ),
                   ],
@@ -3915,7 +3991,7 @@ class _RoomPageState extends State<RoomPage> {
   void _checkForUpdates(Map<String, dynamic> jsonData, {bool verbose = false}) {
     if (!jsonData.containsKey('latest_version')) return;
     final latestVersion = jsonData['latest_version'] as String;
-    const String currentVersion = '1.1.4';
+    const String currentVersion = '1.1.17';
 
     if (_isNewerVersion(latestVersion, currentVersion)) {
       String downloadUrl = '';
@@ -3937,8 +4013,8 @@ class _RoomPageState extends State<RoomPage> {
         SnackBar(
           content: Text(
             _locale == 'ru'
-                ? 'У вас установлена последняя версия v$currentVersion! ✨'
-                : 'You are using the latest version v$currentVersion! ✨',
+                ? 'У вас установлена последняя версия v1.1.18! ✨'
+                : 'You are using the latest version v1.1.18! ✨',
           ),
           backgroundColor: Colors.green,
         ),
@@ -4080,7 +4156,7 @@ class _RoomPageState extends State<RoomPage> {
       final total = res.contentLength ?? 0;
       int received = 0;
 
-      final tempDir = Directory.systemTemp;
+      final tempDir = await getExternalStorageDirectory() ?? await getTemporaryDirectory();
       final apkPath = '${tempDir.path}/app-release.apk';
       final apkFile = File(apkPath);
       if (await apkFile.exists()) await apkFile.delete();
@@ -4880,4 +4956,18 @@ const String _htmlPlayerCode = r'''
 </body>
 </html>
 ''';
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
