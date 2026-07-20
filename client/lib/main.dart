@@ -12,6 +12,7 @@ import 'package:http/http.dart' as http;
 import 'package:window_manager/window_manager.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart' hide Video;
 import 'package:url_launcher/url_launcher.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 const Map<String, Map<String, String>> _localizedValues = {
   'en': {
@@ -143,6 +144,11 @@ Future<Map<String, dynamic>> loadSettings() async {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
+  try {
+    WakelockPlus.enable();
+  } catch (e) {
+    debugPrint('Wakelock error: $e');
+  }
   if (Platform.isWindows) {
     await windowManager.ensureInitialized();
     try {

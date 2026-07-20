@@ -13,6 +13,7 @@ import 'package:http/http.dart' as http;
 import 'package:window_manager/window_manager.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart' hide Video;
 import 'package:url_launcher/url_launcher.dart';
+import 'package:open_filex/open_filex.dart';
 
 const Map<String, Map<String, String>> _localizedValues = {
   'en': {
@@ -240,10 +241,15 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
   }
 
   Future<void> _fetchServerUrlFromGist() async {
+    bool updateChecked = false;
     final gistRawUrl =
         'https://gist.githubusercontent.com/stepa1235/0811a2ec6e74b06965de32f61643da5b/raw/ravestreamer.json?t=${DateTime.now().millisecondsSinceEpoch}';
     try {
-      final response = await http.get(Uri.parse(gistRawUrl)).timeout(const Duration(seconds: 5));
+      final response = await http.get(
+        Uri.parse(gistRawUrl),
+        headers: {'Cache-Control': 'no-cache', 'Pragma': 'no-cache'},
+      ).timeout(const Duration(seconds: 8));
+
       if (response.statusCode == 200) {
         final jsonData = jsonDecode(response.body) as Map<String, dynamic>;
         if (jsonData.containsKey('url')) {
@@ -254,7 +260,10 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
           });
 
           // Check for app updates
-          _checkForUpdates(jsonData);
+          if (jsonData.containsKey('latest_version')) {
+            _checkForUpdates(jsonData);
+            updateChecked = true;
+          }
 
           // Persist so it works offline next time
           await saveSettings({
@@ -264,25 +273,58 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
             'username': _savedUsername,
             'serverUrl': freshUrl,
           });
-          return;
         }
       }
     } catch (e) {
-      debugPrint('Could not fetch Gist, using saved URL: $e');
+      debugPrint('Could not fetch Gist: $e');
     }
+
     // Fallback to saved URL from settings
     final data = await loadSettings();
-    if (data.containsKey('serverUrl')) {
+    if (data.containsKey('serverUrl') && _savedServerUrl.isEmpty) {
       setState(() {
         _savedServerUrl = data['serverUrl'] as String;
       });
     }
+
+    // Secondary update check via Render server /version endpoint if Gist didn't check
+    final targetServerUrl = _savedServerUrl.isNotEmpty 
+        ? _savedServerUrl 
+        : 'https://ravestreamerserver.onrender.com';
+
+    if (!updateChecked) {
+      _fetchVersionFromServer(targetServerUrl);
+    }
   }
 
-  void _checkForUpdates(Map<String, dynamic> jsonData) {
+  Future<void> _fetchVersionFromServer(String serverUrl, {bool verbose = false}) async {
+    try {
+      final res = await http.get(
+        Uri.parse('$serverUrl/version'),
+        headers: {'Cache-Control': 'no-cache'},
+      ).timeout(const Duration(seconds: 6));
+
+      if (res.statusCode == 200) {
+        final jsonData = jsonDecode(res.body) as Map<String, dynamic>;
+        _checkForUpdates(jsonData, verbose: verbose);
+        return;
+      }
+    } catch (e) {
+      debugPrint('Could not fetch version from server $serverUrl: $e');
+    }
+    if (verbose && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_locale == 'ru' ? 'Не удалось проверить обновления' : 'Could not check for updates'),
+        ),
+      );
+    }
+  }
+
+  void _checkForUpdates(Map<String, dynamic> jsonData, {bool verbose = false}) {
     if (!jsonData.containsKey('latest_version')) return;
     final latestVersion = jsonData['latest_version'] as String;
-    const String currentVersion = '1.0.2';
+    const String currentVersion = '1.0.13';
 
     if (latestVersion != currentVersion) {
       String downloadUrl = '';
@@ -295,8 +337,21 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
       if (downloadUrl.isEmpty) return;
 
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        _showUpdateDialog(latestVersion, downloadUrl);
+        if (mounted) {
+          _showUpdateDialog(latestVersion, downloadUrl);
+        }
       });
+    } else if (verbose && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            _locale == 'ru'
+                ? 'У вас установлена последняя версия v$currentVersion! ✨'
+                : 'You are using the latest version v$currentVersion! ✨',
+          ),
+          backgroundColor: Colors.green,
+        ),
+      );
     }
   }
 
@@ -313,14 +368,25 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
             side: BorderSide(color: activeTheme.primary.withOpacity(0.3), width: 1),
           ),
           title: Text(
-            _locale == 'ru' ? 'Доступно обновление! 🚀' : 'Update Available! 🚀',
+            _locale == 'ru' ? 'Доступно обновление v$version! 🚀' : 'Update Available v$version! 🚀',
             style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
           ),
-          content: Text(
-            _locale == 'ru'
-                ? 'Доступна новая версия RaveStreamer v$version (текущая v1.0.2).\nХотите обновиться?'
-                : 'A new version of RaveStreamer v$version is available (current v1.0.2).\nDo you want to update?',
-            style: const TextStyle(color: Colors.white70),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                _locale == 'ru'
+                    ? 'Вышла новая версия RaveStreamer v$version.\nНажмите «Авто-установка» для скачивания внутри приложения!'
+                    : 'A new version of RaveStreamer v$version is available.\nTap "Auto-Install" for direct in-app download!',
+                style: const TextStyle(color: Colors.white70, fontSize: 13),
+              ),
+              const SizedBox(height: 12),
+              SelectableText(
+                downloadUrl,
+                style: const TextStyle(color: Color(0xFF00F2FE), fontSize: 11, decoration: TextDecoration.underline),
+              ),
+            ],
           ),
           actions: [
             TextButton(
@@ -330,7 +396,7 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
                 style: const TextStyle(color: Colors.white54),
               ),
             ),
-            ElevatedButton(
+            ElevatedButton.icon(
               style: ElevatedButton.styleFrom(
                 backgroundColor: activeTheme.primary,
                 foregroundColor: Colors.white,
@@ -338,17 +404,13 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
                   borderRadius: BorderRadius.circular(8.0),
                 ),
               ),
-              onPressed: () async {
+              icon: const Icon(Icons.downloading, size: 16),
+              onPressed: () {
                 Navigator.of(context).pop();
-                try {
-                  final uri = Uri.parse(downloadUrl);
-                  await launchUrl(uri, mode: LaunchMode.externalApplication);
-                } catch (e) {
-                  debugPrint('Could not launch update URL: $e');
-                }
+                _downloadAndInstallUpdate(downloadUrl, version);
               },
-              child: Text(
-                _locale == 'ru' ? 'Обновить' : 'Update',
+              label: Text(
+                _locale == 'ru' ? 'Авто-установка v$version' : 'Auto-Install v$version',
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
             ),
@@ -356,6 +418,126 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
         );
       },
     );
+  }
+
+  Future<void> _downloadAndInstallUpdate(String downloadUrl, String version) async {
+    double progress = 0.0;
+    StateSetter? dialogSetState;
+    bool isDownloading = true;
+    String statusText = _locale == 'ru' ? 'Подключение к серверу...' : 'Connecting to server...';
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (context, setState) {
+          dialogSetState = setState;
+          return AlertDialog(
+            backgroundColor: const Color(0xFF161426),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: const BorderSide(color: Color(0xFF00F2FE), width: 1),
+            ),
+            title: Row(
+              children: [
+                if (isDownloading)
+                  const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF00F2FE)))
+                else
+                  const Icon(Icons.check_circle, color: Colors.green),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    _locale == 'ru' ? 'Автообновление v$version' : 'Auto-Updating v$version',
+                    style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(statusText, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                const SizedBox(height: 12),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: LinearProgressIndicator(
+                    value: progress > 0 ? progress : null,
+                    backgroundColor: Colors.white12,
+                    color: const Color(0xFF00F2FE),
+                    minHeight: 8,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Text(
+                    '${(progress * 100).toStringAsFixed(1)}%',
+                    style: const TextStyle(color: Color(0xFF00F2FE), fontSize: 13, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+
+    try {
+      final req = http.Request('GET', Uri.parse(downloadUrl));
+      final res = await http.Client().send(req);
+      final total = res.contentLength ?? 0;
+      int received = 0;
+
+      final tempDir = Directory.systemTemp;
+      final apkPath = '${tempDir.path}/app-release.apk';
+      final apkFile = File(apkPath);
+      if (await apkFile.exists()) await apkFile.delete();
+
+      final sink = apkFile.openWrite();
+
+      await res.stream.forEach((chunk) {
+        received += chunk.length;
+        sink.add(chunk);
+        if (total > 0 && dialogSetState != null) {
+          dialogSetState!(() {
+            progress = received / total;
+            final mbReceived = (received / (1024 * 1024)).toStringAsFixed(1);
+            final mbTotal = (total / (1024 * 1024)).toStringAsFixed(1);
+            statusText = _locale == 'ru'
+                ? 'Загрузка: $mbReceived MB / $mbTotal MB'
+                : 'Downloading: $mbReceived MB / $mbTotal MB';
+          });
+        }
+      });
+
+      await sink.close();
+
+      if (dialogSetState != null) {
+        dialogSetState!(() {
+          isDownloading = false;
+          statusText = _locale == 'ru' ? 'Скачано! Запуск установки...' : 'Downloaded! Launching installer...';
+        });
+      }
+
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (mounted) Navigator.of(context).pop();
+
+      // Launch installer
+      final fileUri = Uri.file(apkPath);
+      final webUri = Uri.parse(downloadUrl);
+      if (await canLaunchUrl(fileUri)) {
+        await launchUrl(fileUri);
+      } else {
+        await launchUrl(webUri, mode: LaunchMode.externalApplication);
+      }
+    } catch (e) {
+      debugPrint('Auto-download error: $e');
+      if (mounted) Navigator.of(context).pop();
+      try {
+        await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
+      } catch (_) {}
+    }
   }
 
 
@@ -567,6 +749,453 @@ class _ConnectionPageState extends State<ConnectionPage> {
     );
   }
 
+  void _showGlobalSettingsDialog(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return Container(
+          decoration: const BoxDecoration(
+            color: Color(0xFF161426),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          padding: EdgeInsets.only(
+            left: 20,
+            right: 20,
+            top: 20,
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.settings, color: Color(0xFF00F2FE)),
+                        const SizedBox(width: 8),
+                        Text(
+                          widget.locale == 'ru' ? 'Настройки приложения ⚙️' : 'App Settings ⚙️',
+                          style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                        ),
+                      ],
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white54),
+                      onPressed: () => Navigator.of(ctx).pop(),
+                    ),
+                  ],
+                ),
+                const Divider(color: Colors.white12),
+                const SizedBox(height: 12),
+
+                // Language Card
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(12)),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(widget.locale == 'ru' ? 'Язык / Language' : 'Language', style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+                      Row(
+                        children: [
+                          ChoiceChip(
+                            label: const Text('RU'),
+                            selected: widget.locale == 'ru',
+                            onSelected: (_) => widget.onLocaleChange('ru'),
+                            selectedColor: const Color(0xFF6C63FF),
+                          ),
+                          const SizedBox(width: 8),
+                          ChoiceChip(
+                            label: const Text('EN'),
+                            selected: widget.locale == 'en',
+                            onSelected: (_) => widget.onLocaleChange('en'),
+                            selectedColor: const Color(0xFF6C63FF),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                // Theme Card
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(12)),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(widget.locale == 'ru' ? 'Тема оформления' : 'App Theme', style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        children: [
+                          'Dark', 'Neon Cyan', 'Sunset Gold', 'Retro Purple'
+                        ].map((t) => ChoiceChip(
+                          label: Text(t),
+                          selected: widget.themeName == t,
+                          onSelected: (_) => widget.onThemeChange(t),
+                          selectedColor: const Color(0xFF00F2FE).withOpacity(0.4),
+                        )).toList(),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                // Chat Font Size Card
+                StatefulBuilder(
+                  builder: (context, setSt) {
+                    return Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(12)),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(widget.locale == 'ru' ? 'Шрифт чата' : 'Chat Font Size', style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+                              Text('${widget.chatFontSize.toInt()} px', style: const TextStyle(color: Color(0xFF00F2FE), fontSize: 12)),
+                            ],
+                          ),
+                          Slider(
+                            min: 10.0,
+                            max: 24.0,
+                            divisions: 14,
+                            value: widget.chatFontSize,
+                            activeColor: const Color(0xFF6C63FF),
+                            onChanged: (val) {
+                              setSt(() {});
+                              widget.onChatFontSizeChange(val);
+                            },
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+                const SizedBox(height: 12),
+
+                // Auto-Update Card
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(12)),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Row(
+                        children: [
+                          Icon(Icons.system_update, size: 16, color: Color(0xFF00F2FE)),
+                          SizedBox(width: 8),
+                          Text('Автообновление (v1.0.13)', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+                        ],
+                      ),
+                      ElevatedButton(
+                        onPressed: () {
+                          Navigator.of(ctx).pop();
+                          _fetchVersionFromServer(_serverController.text.trim(), verbose: true);
+                        },
+                        style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00F2FE).withOpacity(0.2), foregroundColor: const Color(0xFF00F2FE)),
+                        child: Text(widget.locale == 'ru' ? 'Проверить' : 'Check'),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                // Server URL Input Card
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(12)),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(widget.locale == 'ru' ? 'Адрес сервера' : 'Server Address', style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 6),
+                      TextField(
+                        controller: _serverController,
+                        style: const TextStyle(color: Colors.white, fontSize: 12),
+                        decoration: InputDecoration(
+                          filled: true,
+                          fillColor: Colors.black26,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _fetchVersionFromServer(String serverUrl, {bool verbose = false}) async {
+    try {
+      final res = await http.get(
+        Uri.parse('$serverUrl/version'),
+        headers: {'Cache-Control': 'no-cache'},
+      ).timeout(const Duration(seconds: 6));
+
+      if (res.statusCode == 200) {
+        final jsonData = jsonDecode(res.body) as Map<String, dynamic>;
+        _checkForUpdates(jsonData, verbose: verbose);
+        return;
+      }
+    } catch (e) {
+      debugPrint('Could not fetch version from server $serverUrl: $e');
+    }
+    if (verbose && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(widget.locale == 'ru' ? 'Не удалось проверить обновления' : 'Could not check for updates'),
+        ),
+      );
+    }
+  }
+
+  bool _isNewerVersion(String latest, String current) {
+    try {
+      List<int> parse(String v) => v.split('.').map((e) => int.tryParse(e.replaceAll(RegExp(r'\D'), '')) ?? 0).toList();
+      final l = parse(latest);
+      final c = parse(current);
+      final maxLen = l.length > c.length ? l.length : c.length;
+      for (int i = 0; i < maxLen; i++) {
+        final lNum = i < l.length ? l[i] : 0;
+        final cNum = i < c.length ? c[i] : 0;
+        if (lNum > cNum) return true;
+        if (lNum < cNum) return false;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  void _checkForUpdates(Map<String, dynamic> jsonData, {bool verbose = false}) {
+    if (!jsonData.containsKey('latest_version')) return;
+    final latestVersion = jsonData['latest_version'] as String;
+    const String currentVersion = '1.0.13';
+
+    if (_isNewerVersion(latestVersion, currentVersion)) {
+      String downloadUrl = '';
+      if (Platform.isAndroid) {
+        downloadUrl = jsonData['android_url'] as String? ?? '';
+      } else if (Platform.isWindows) {
+        downloadUrl = jsonData['windows_url'] as String? ?? '';
+      }
+
+      if (downloadUrl.isEmpty) return;
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _showUpdateDialog(latestVersion, downloadUrl);
+        }
+      });
+    } else if (verbose && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            widget.locale == 'ru'
+                ? 'У вас установлена последняя версия v$currentVersion! ✨'
+                : 'You are using the latest version v$currentVersion! ✨',
+          ),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
+  }
+
+  void _showUpdateDialog(String version, String downloadUrl) {
+    final activeTheme = _themes[widget.themeName] ?? _themes['Dark']!;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          backgroundColor: activeTheme.cardColor,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16.0),
+            side: BorderSide(color: activeTheme.primary.withOpacity(0.3), width: 1),
+          ),
+          title: Text(
+            widget.locale == 'ru' ? 'Доступно обновление v$version! 🚀' : 'Update Available v$version! 🚀',
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                widget.locale == 'ru'
+                    ? 'Вышла новая версия RaveStreamer v$version.\nНажмите «Авто-установка» для скачивания внутри приложения!'
+                    : 'A new version of RaveStreamer v$version is available.\nTap "Auto-Install" for direct in-app download!',
+                style: const TextStyle(color: Colors.white70, fontSize: 13),
+              ),
+              const SizedBox(height: 12),
+              SelectableText(
+                downloadUrl,
+                style: const TextStyle(color: Color(0xFF00F2FE), fontSize: 11, decoration: TextDecoration.underline),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(
+                widget.locale == 'ru' ? 'Позже' : 'Later',
+                style: const TextStyle(color: Colors.white54),
+              ),
+            ),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: activeTheme.primary,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8.0),
+                ),
+              ),
+              icon: const Icon(Icons.downloading, size: 16),
+              onPressed: () {
+                Navigator.of(context).pop();
+                _downloadAndInstallUpdate(downloadUrl, version);
+              },
+              label: Text(
+                widget.locale == 'ru' ? 'Авто-установка v$version' : 'Auto-Install v$version',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _downloadAndInstallUpdate(String downloadUrl, String version) async {
+    double progress = 0.0;
+    StateSetter? dialogSetState;
+    bool isDownloading = true;
+    String statusText = widget.locale == 'ru' ? 'Подключение к серверу...' : 'Connecting to server...';
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (context, setState) {
+          dialogSetState = setState;
+          return AlertDialog(
+            backgroundColor: const Color(0xFF161426),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: const BorderSide(color: Color(0xFF00F2FE), width: 1),
+            ),
+            title: Row(
+              children: [
+                if (isDownloading)
+                  const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF00F2FE)))
+                else
+                  const Icon(Icons.check_circle, color: Colors.green),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    widget.locale == 'ru' ? 'Автообновление v$version' : 'Auto-Updating v$version',
+                    style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(statusText, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                const SizedBox(height: 12),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: LinearProgressIndicator(
+                    value: progress > 0 ? progress : null,
+                    backgroundColor: Colors.white12,
+                    color: const Color(0xFF00F2FE),
+                    minHeight: 8,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Text(
+                    '${(progress * 100).toStringAsFixed(1)}%',
+                    style: const TextStyle(color: Color(0xFF00F2FE), fontSize: 13, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+
+    try {
+      final req = http.Request('GET', Uri.parse(downloadUrl));
+      final res = await http.Client().send(req);
+      final total = res.contentLength ?? 0;
+      int received = 0;
+
+      final tempDir = Directory.systemTemp;
+      final apkPath = '${tempDir.path}/app-release.apk';
+      final apkFile = File(apkPath);
+      if (await apkFile.exists()) await apkFile.delete();
+
+      final sink = apkFile.openWrite();
+
+      await res.stream.forEach((chunk) {
+        received += chunk.length;
+        sink.add(chunk);
+        if (total > 0 && dialogSetState != null) {
+          dialogSetState!(() {
+            progress = received / total;
+            final mbReceived = (received / (1024 * 1024)).toStringAsFixed(1);
+            final mbTotal = (total / (1024 * 1024)).toStringAsFixed(1);
+            statusText = widget.locale == 'ru'
+                ? 'Загрузка: $mbReceived MB / $mbTotal MB'
+                : 'Downloading: $mbReceived MB / $mbTotal MB';
+          });
+        }
+      });
+
+      await sink.close();
+
+      if (dialogSetState != null) {
+        dialogSetState!(() {
+          isDownloading = false;
+          statusText = widget.locale == 'ru' ? 'Скачано! Запуск установки...' : 'Downloaded! Launching installer...';
+        });
+      }
+
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (mounted) Navigator.of(context).pop();
+
+      // Launch installer
+      final result = await OpenFilex.open(apkPath, type: "application/vnd.android.package-archive");
+      debugPrint('OpenFilex result: ${result.type} ${result.message}');
+      if (result.type != ResultType.done) {
+        await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
+      }
+    } catch (e) {
+      debugPrint('Auto-download error: $e');
+      if (mounted) Navigator.of(context).pop();
+      try {
+        await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
+      } catch (_) {}
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final themeData = _themes[widget.themeName] ?? _themes['Dark']!;
@@ -608,24 +1237,43 @@ class _ConnectionPageState extends State<ConnectionPage> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      // Language Selector Row
-                      Align(
-                        alignment: Alignment.topRight,
-                        child: DropdownButtonHideUnderline(
-                          child: DropdownButton<String>(
-                            value: widget.locale,
-                            dropdownColor: const Color(0xFF161426),
-                            style: const TextStyle(fontSize: 12, color: Colors.white),
-                            icon: const Icon(Icons.language, size: 16, color: Color(0xFF00F2FE)),
-                            items: const [
-                              DropdownMenuItem(value: 'ru', child: Text('RU')),
-                              DropdownMenuItem(value: 'en', child: Text('EN')),
-                            ],
-                            onChanged: (lang) {
-                              if (lang != null) widget.onLocaleChange(lang);
-                            },
+                      // Top Action Bar: Settings & Language
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF6C63FF).withOpacity(0.2),
+                              foregroundColor: const Color(0xFF00F2FE),
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
+                                side: const BorderSide(color: Color(0xFF00F2FE), width: 0.8),
+                              ),
+                            ),
+                            icon: const Icon(Icons.settings, size: 16),
+                            label: Text(
+                              widget.locale == 'ru' ? 'Настройки ⚙️' : 'Settings ⚙️',
+                              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                            ),
+                            onPressed: () => _showGlobalSettingsDialog(context),
                           ),
-                        ),
+                          DropdownButtonHideUnderline(
+                            child: DropdownButton<String>(
+                              value: widget.locale,
+                              dropdownColor: const Color(0xFF161426),
+                              style: const TextStyle(fontSize: 12, color: Colors.white),
+                              icon: const Icon(Icons.language, size: 16, color: Color(0xFF00F2FE)),
+                              items: const [
+                                DropdownMenuItem(value: 'ru', child: Text('RU')),
+                                DropdownMenuItem(value: 'en', child: Text('EN')),
+                              ],
+                              onChanged: (lang) {
+                                if (lang != null) widget.onLocaleChange(lang);
+                              },
+                            ),
+                          ),
+                        ],
                       ),
                       const SizedBox(height: 8),
 
@@ -770,7 +1418,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
                 border: Border.all(color: Colors.white.withOpacity(0.1)),
               ),
               child: Text(
-                'v1.0.2',
+                'v1.0.13',
                 style: TextStyle(
                   color: Colors.white.withOpacity(0.6),
                   fontSize: 11,
@@ -869,6 +1517,7 @@ class _RoomPageState extends State<RoomPage> {
   // Tabs, Chat & Localization States
   int _selectedTab = 0; // 0 = Controls, 1 = Chat, 2 = Settings
   final List<Map<String, String>> _messages = []; // [{ 'sender': 'Name', 'text': 'Hello', 'time': '12:34' }]
+  int _unreadMessages = 0;
   late double _chatFontSize; // Default chat font size
   late String _locale;
   
@@ -1056,6 +1705,9 @@ class _RoomPageState extends State<RoomPage> {
           'text': data['text'] as String,
           'time': (data['timestamp'] ?? data['time'] ?? '') as String,
         });
+        if (_selectedTab != 1) {
+          _unreadMessages++;
+        }
       });
       // Scroll to bottom
       Timer(const Duration(milliseconds: 100), () {
@@ -1309,142 +1961,22 @@ class _RoomPageState extends State<RoomPage> {
 
 
   Future<String?> getYoutubeStreamUrl(String youtubeUrl) async {
-    try {
-      final appData = Platform.environment['LOCALAPPDATA'] ?? Directory.systemTemp.path;
-      final dir = Directory('$appData\\RaveStreamer');
-      if (!dir.existsSync()) dir.createSync(recursive: true);
-      final ytDlp = '${dir.path}\\yt-dlp.exe';
-      
-      if (!File(ytDlp).existsSync()) {
-        debugPrint('Downloading yt-dlp.exe to $ytDlp');
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_locale == 'ru' ? 'Первоначальная настройка: скачивание yt-dlp...' : 'First time setup: downloading yt-dlp...'), duration: const Duration(seconds: 4)));
-        }
-        final response = await http.get(Uri.parse('https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp.exe'));
-        await File(ytDlp).writeAsBytes(response.bodyBytes);
-      }
-      
-      debugPrint('Running local yt-dlp with Chrome cookies...');
-      var result = await Process.run(ytDlp, ['--dump-json', '-f', 'b[ext=mp4]/b/best', '--no-warnings', '--no-check-certificate', '--extractor-args', 'youtube:player_client=ios', '--cookies-from-browser', 'chrome', youtubeUrl]);
-      
-      if (result.exitCode != 0) {
-        debugPrint('Chrome cookies failed, trying Edge cookies...');
-        result = await Process.run(ytDlp, ['--dump-json', '-f', 'b[ext=mp4]/b/best', '--no-warnings', '--no-check-certificate', '--extractor-args', 'youtube:player_client=ios', '--cookies-from-browser', 'edge', youtubeUrl]);
-      }
-      
-      if (result.exitCode != 0) {
-        debugPrint('Cookies failed, trying without cookies...');
-        result = await Process.run(ytDlp, ['--dump-json', '-f', 'b[ext=mp4]/b/best', '--no-warnings', '--no-check-certificate', '--extractor-args', 'youtube:player_client=ios', youtubeUrl]);
-      }
-      
-      if (result.exitCode == 0) {
-        final data = jsonDecode(result.stdout as String);
-        debugPrint('Successfully extracted YouTube URL via local yt-dlp!');
-        return data['url'] as String;
-      } else {
-        debugPrint('Local yt-dlp failed: ${result.stderr}');
-      }
-    } catch (e) {
-      debugPrint('Error with local yt-dlp: $e');
-    }
-    
-    debugPrint('Trying Invidious API fallback on client...');
-    final invidiousInstances = ['https://vid.puffyan.us', 'https://invidious.jing.rocks', 'https://inv.tux.pizza', 'https://invidious.protokolla.fi', 'https://inv.nadeko.net', 'https://invidious.nerdvpn.de'];
     String videoIdStr = youtubeUrl;
-    try { 
-      videoIdStr = VideoId(youtubeUrl).value; 
-    } catch(_) { 
-      if (youtubeUrl.contains('v=')) {
-        videoIdStr = youtubeUrl.split('v=')[1].split('&')[0]; 
-      }
-    }
-    
-    for (final inst in invidiousInstances) {
-      try {
-        final res = await http.get(Uri.parse('$inst/api/v1/videos/$videoIdStr')).timeout(const Duration(seconds: 4));
-        if (res.statusCode == 200) {
-          final data = jsonDecode(res.body);
-          if (data['formatStreams'] != null && (data['formatStreams'] as List).isNotEmpty) {
-            final streams = data['formatStreams'] as List;
-            var stream = streams.firstWhere((s) => (s['resolution'] ?? '').contains('1080'), orElse: () => null);
-            stream ??= streams.firstWhere((s) => (s['resolution'] ?? '').contains('720'), orElse: () => streams.first);
-            if (stream != null && stream['url'] != null) {
-              debugPrint('Client Invidious API fallback successful on $inst.');
-              return stream['url'] as String;
-            }
-          }
-        }
-      } catch (e) {}
-    }
-    
-    debugPrint('Trying Piped API fallback on client...');
-    final pipedInstances = ['https://pipedapi.kavin.rocks', 'https://api.piped.projectsegfau.lt', 'https://pipedapi.in.projectsegfau.lt', 'https://pipedapi.us.projectsegfau.lt', 'https://piped-api.garudalinux.org'];
-    for (final inst in pipedInstances) {
-      try {
-        final res = await http.get(Uri.parse('$inst/streams/$videoIdStr')).timeout(const Duration(seconds: 4));
-        if (res.statusCode == 200) {
-          final data = jsonDecode(res.body);
-          if (data['videoStreams'] != null && (data['videoStreams'] as List).isNotEmpty) {
-            final streams = data['videoStreams'] as List;
-            var stream = streams.firstWhere((s) => s['videoOnly'] == false && (s['quality'] ?? '').contains('1080'), orElse: () => null);
-            stream ??= streams.firstWhere((s) => s['videoOnly'] == false && (s['quality'] ?? '').contains('720'), orElse: () => null);
-            stream ??= streams.firstWhere((s) => s['videoOnly'] == false, orElse: () => streams.first);
-            if (stream != null && stream['url'] != null) {
-              debugPrint('Client Piped API fallback successful on $inst.');
-              return stream['url'] as String;
-            }
-          }
-        }
-      } catch (e) {}
-    }
-    
-    // Fallback to youtube_explode
-    final yt = YoutubeExplode();
     try {
-      String videoIdStr;
-      try {
-        final videoId = VideoId(youtubeUrl);
-        videoIdStr = videoId.value;
-      } catch (_) {
-        videoIdStr = youtubeUrl;
+      final uri = Uri.parse(youtubeUrl);
+      if (uri.host.contains('youtu.be')) {
+        videoIdStr = uri.pathSegments.isNotEmpty ? uri.pathSegments.first : youtubeUrl;
+      } else if (uri.queryParameters.containsKey('v')) {
+        videoIdStr = uri.queryParameters['v']!;
+      } else if (uri.pathSegments.contains('embed')) {
+        final idx = uri.pathSegments.indexOf('embed');
+        if (idx + 1 < uri.pathSegments.length) videoIdStr = uri.pathSegments[idx + 1];
       }
-      
-      debugPrint('Fetching YouTube manifest for ID: $videoIdStr');
-      final manifest = await yt.videos.streamsClient.getManifest(videoIdStr);
-      
-      debugPrint('Muxed streams count: ${manifest.muxed.length}');
-      if (manifest.muxed.isNotEmpty) {
-        MuxedStreamInfo? selectedStream;
-        if (_preferredQuality != 'Auto') {
-          try {
-            final targetHeight = int.parse(_preferredQuality.replaceAll('p', ''));
-            final streams = manifest.muxed.where((s) => s.videoResolution.height <= targetHeight).toList();
-            if (streams.isNotEmpty) {
-              streams.sort((a, b) => b.videoResolution.height.compareTo(a.videoResolution.height));
-              selectedStream = streams.first;
-            }
-          } catch(e) {}
-        }
-        selectedStream ??= manifest.muxed.withHighestBitrate();
-        
-        final directUrl = selectedStream.url.toString();
-        debugPrint('Successfully extracted YouTube muxed stream URL: $directUrl');
-        return directUrl;
-      } else {
-        debugPrint('Muxed streams list is empty. Trying fallback.');
-        if (manifest.videoOnly.isNotEmpty) {
-          final streamInfo = manifest.videoOnly.withHighestBitrate();
-          final directUrl = streamInfo.url.toString();
-          debugPrint('Using video-only stream fallback: $directUrl');
-          return directUrl;
-        }
-      }
-    } catch (e) {
-      debugPrint('Error extracting YouTube URL: $e');
-    } finally {
-      yt.close();
-    }
-    return null;
+    } catch (_) {}
+
+    final embedUrl = 'https://www.youtube.com/embed/$videoIdStr?autoplay=1&enablejsapi=1';
+    debugPrint('[youtube] Converted YouTube URL to Embed: $embedUrl');
+    return embedUrl;
   }
 
   // Send video change event to server
@@ -2006,7 +2538,7 @@ class _RoomPageState extends State<RoomPage> {
       _showControls = true;
     });
     _controlsTimer?.cancel();
-    _controlsTimer = Timer(const Duration(seconds: 4), () {
+    _controlsTimer = Timer(const Duration(seconds: 3), () {
       if (mounted && (_mkPlayer?.state.playing ?? false)) {
         setState(() {
           _showControls = false;
@@ -2021,7 +2553,8 @@ class _RoomPageState extends State<RoomPage> {
     final isDesktop = screenWidth > 800;
 
     return Scaffold(
-      appBar: AppBar(
+      appBar: _showControls || !(_mkPlayer?.state.playing ?? false)
+          ? AppBar(
         title: Row(
           children: [
             Container(
@@ -2045,7 +2578,7 @@ class _RoomPageState extends State<RoomPage> {
                 borderRadius: BorderRadius.circular(6),
               ),
               child: Text(
-                'v1.0.2',
+                'v1.0.13',
                 style: TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.5), fontWeight: FontWeight.bold),
               ),
             ),
@@ -2069,8 +2602,12 @@ class _RoomPageState extends State<RoomPage> {
             tooltip: _loc('activeUsers'),
           ),
         ],
-      ),
-      body: Container(
+      )
+          : PreferredSize(preferredSize: Size.zero, child: const SizedBox.shrink()),
+      body: GestureDetector(
+        onTap: _triggerControlsVisibility,
+        behavior: HitTestBehavior.opaque,
+        child: Container(
         color: const Color(0xFF0D0B14),
         child: (isDesktop || MediaQuery.of(context).orientation == Orientation.landscape)
             ? Row(
@@ -2079,7 +2616,7 @@ class _RoomPageState extends State<RoomPage> {
                     flex: 3,
                     child: _buildMainContent(),
                   ),
-                  if (_isSidebarVisible) ...[
+                  if (_isSidebarVisible && (_showControls || !(_mkPlayer?.state.playing ?? false))) ...[
                     VerticalDivider(
                       color: Colors.white.withOpacity(0.05),
                       width: 1,
@@ -2112,6 +2649,7 @@ class _RoomPageState extends State<RoomPage> {
                   ],
                 ],
               ),
+      ),
       ),
     );
   }
@@ -2195,6 +2733,7 @@ class _RoomPageState extends State<RoomPage> {
     final duration = _mkPlayer!.state.duration;
     final isPlaying = _mkPlayer!.state.playing;
     final volume = _mkPlayer!.state.volume / 100.0; // media_kit volume is 0-100
+    final isMeHost = _users.isNotEmpty && _users[0]['id'] == _socket.id;
 
     String formatDuration(Duration d) {
       String twoDigits(int n) => n.toString().padLeft(2, "0");
@@ -2267,32 +2806,44 @@ class _RoomPageState extends State<RoomPage> {
                     children: [
                       Text(
                         formatDuration(position),
-                        style: const TextStyle(color: Colors.white, fontSize: 12),
+                        style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
                       ),
+                      const SizedBox(width: 8),
                       Expanded(
-                        child: SliderTheme(
-                          data: SliderTheme.of(context).copyWith(
-                            activeTrackColor: const Color(0xFF00F2FE),
-                            inactiveTrackColor: Colors.white24,
-                            thumbColor: const Color(0xFF6C63FF),
-                            trackHeight: 4,
-                            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-                          ),
-                          child: Slider(
-                            min: 0.0,
-                            max: duration.inMilliseconds > 0 
-                              ? duration.inMilliseconds / 1000.0 
-                              : 100.0,
-                            value: position.inMilliseconds / 1000.0,
-                            onChanged: (val) {
-                              _localSeek(val);
-                            },
-                          ),
-                        ),
+                        child: isMeHost
+                            ? SliderTheme(
+                                data: SliderTheme.of(context).copyWith(
+                                  activeTrackColor: const Color(0xFF00F2FE),
+                                  inactiveTrackColor: Colors.white24,
+                                  thumbColor: const Color(0xFF6C63FF),
+                                  trackHeight: 4,
+                                  thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                                ),
+                                child: Slider(
+                                  min: 0.0,
+                                  max: duration.inMilliseconds > 0 
+                                    ? duration.inMilliseconds / 1000.0 
+                                    : 100.0,
+                                  value: (position.inMilliseconds / 1000.0).clamp(0.0, duration.inMilliseconds > 0 ? duration.inMilliseconds / 1000.0 : 100.0),
+                                  onChanged: (val) {
+                                    _localSeek(val);
+                                  },
+                                ),
+                              )
+                            : ClipRRect(
+                                borderRadius: BorderRadius.circular(4),
+                                child: LinearProgressIndicator(
+                                  value: duration.inMilliseconds > 0 ? position.inMilliseconds / duration.inMilliseconds : 0.0,
+                                  backgroundColor: Colors.white12,
+                                  valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF00F2FE)),
+                                  minHeight: 4,
+                                ),
+                              ),
                       ),
+                      const SizedBox(width: 8),
                       Text(
                         formatDuration(duration),
-                        style: const TextStyle(color: Colors.white, fontSize: 12),
+                        style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
                       ),
                     ],
                   ),
@@ -2304,20 +2855,41 @@ class _RoomPageState extends State<RoomPage> {
                       Expanded(
                         child: Row(
                           children: [
-                            IconButton(
-                            iconSize: 42,
-                            color: Colors.white,
-                            icon: Icon(isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled),
-                            onPressed: isPlaying ? _localPause : _localPlay,
-                          ),
-                          IconButton(
-                            iconSize: 32,
-                            color: Colors.white,
-                            icon: const Icon(Icons.skip_next),
-                            onPressed: () {
-                              _socket.emit('skip-video', {'roomId': widget.roomId});
-                            },
-                          ),
+                            if (isMeHost) ...[
+                              IconButton(
+                                iconSize: 42,
+                                color: Colors.white,
+                                icon: Icon(isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled),
+                                onPressed: isPlaying ? _localPause : _localPlay,
+                              ),
+                              IconButton(
+                                iconSize: 32,
+                                color: Colors.white,
+                                icon: const Icon(Icons.skip_next),
+                                onPressed: () {
+                                  _socket.emit('skip-video', {'roomId': widget.roomId});
+                                },
+                              ),
+                            ] else ...[
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: Colors.black45,
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: Colors.white12),
+                                ),
+                                child: const Row(
+                                  children: [
+                                    Icon(Icons.visibility, size: 14, color: Color(0xFF00F2FE)),
+                                    SizedBox(width: 6),
+                                    Text(
+                                      'Режим просмотра',
+                                      style: TextStyle(fontSize: 11, color: Colors.white70, fontWeight: FontWeight.bold),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
                           const SizedBox(width: 8),
                           IconButton(
                             iconSize: 22,
@@ -2441,6 +3013,7 @@ class _RoomPageState extends State<RoomPage> {
         onTap: () {
           setState(() {
             _selectedTab = index;
+            if (index == 1) _unreadMessages = 0;
           });
         },
         child: Container(
@@ -2471,6 +3044,19 @@ class _RoomPageState extends State<RoomPage> {
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
+                if (index == 1 && _unreadMessages > 0)
+                  Container(
+                    margin: const EdgeInsets.only(left: 4),
+                    padding: const EdgeInsets.all(4),
+                    decoration: const BoxDecoration(
+                      color: Colors.redAccent,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Text(
+                      _unreadMessages > 9 ? '9+' : _unreadMessages.toString(),
+                      style: const TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.bold),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -2482,6 +3068,34 @@ class _RoomPageState extends State<RoomPage> {
   Widget _buildControlsTab() {
     // Check if the current user is host
     final isMeHost = _users.isNotEmpty && _users[0]['id'] == _socket.id;
+
+    if (!isMeHost) {
+      return SingleChildScrollView(
+        child: Column(
+          children: [
+            const SizedBox(height: 20),
+            _buildCard(
+              child: Column(
+                children: [
+                  const Icon(Icons.lock, size: 42, color: Color(0xFF00F2FE)),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Управление у Хоста 👑',
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Только создатель комнаты может менять фильм, ставить на паузу или перематывать.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 12, color: Colors.white.withOpacity(0.6)),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
 
     return SingleChildScrollView(
       child: Column(
@@ -3081,9 +3695,303 @@ class _RoomPageState extends State<RoomPage> {
             ),
           ),
           const SizedBox(height: 12),
+          // Check for Updates card
+          _buildCard(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Row(
+                  children: [
+                    Icon(Icons.system_update, size: 16, color: Color(0xFF00F2FE)),
+                    SizedBox(width: 8),
+                    Text(
+                      'Автообновление (v1.0.13)',
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    final targetUrl = widget.serverUrl.isNotEmpty ? widget.serverUrl : 'https://ravestreamerserver.onrender.com';
+                    _fetchVersionFromServer(targetUrl, verbose: true);
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF00F2FE).withOpacity(0.2),
+                    foregroundColor: const Color(0xFF00F2FE),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      side: const BorderSide(color: Color(0xFF00F2FE)),
+                    ),
+                  ),
+                  child: Text(
+                    _locale == 'ru' ? 'Проверить' : 'Check',
+                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
+  }
+
+  Future<void> _fetchVersionFromServer(String serverUrl, {bool verbose = false}) async {
+    try {
+      final res = await http.get(
+        Uri.parse('$serverUrl/version'),
+        headers: {'Cache-Control': 'no-cache'},
+      ).timeout(const Duration(seconds: 6));
+
+      if (res.statusCode == 200) {
+        final jsonData = jsonDecode(res.body) as Map<String, dynamic>;
+        _checkForUpdates(jsonData, verbose: verbose);
+        return;
+      }
+    } catch (e) {
+      debugPrint('Could not fetch version from server $serverUrl: $e');
+    }
+    if (verbose && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_locale == 'ru' ? 'Не удалось проверить обновления' : 'Could not check for updates'),
+        ),
+      );
+    }
+  }
+
+  bool _isNewerVersion(String latest, String current) {
+    try {
+      List<int> parse(String v) => v.split('.').map((e) => int.tryParse(e.replaceAll(RegExp(r'\D'), '')) ?? 0).toList();
+      final l = parse(latest);
+      final c = parse(current);
+      final maxLen = l.length > c.length ? l.length : c.length;
+      for (int i = 0; i < maxLen; i++) {
+        final lNum = i < l.length ? l[i] : 0;
+        final cNum = i < c.length ? c[i] : 0;
+        if (lNum > cNum) return true;
+        if (lNum < cNum) return false;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  void _checkForUpdates(Map<String, dynamic> jsonData, {bool verbose = false}) {
+    if (!jsonData.containsKey('latest_version')) return;
+    final latestVersion = jsonData['latest_version'] as String;
+    const String currentVersion = '1.0.13';
+
+    if (_isNewerVersion(latestVersion, currentVersion)) {
+      String downloadUrl = '';
+      if (Platform.isAndroid) {
+        downloadUrl = jsonData['android_url'] as String? ?? '';
+      } else if (Platform.isWindows) {
+        downloadUrl = jsonData['windows_url'] as String? ?? '';
+      }
+
+      if (downloadUrl.isEmpty) return;
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _showUpdateDialog(latestVersion, downloadUrl);
+        }
+      });
+    } else if (verbose && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            _locale == 'ru'
+                ? 'У вас установлена последняя версия v$currentVersion! ✨'
+                : 'You are using the latest version v$currentVersion! ✨',
+          ),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
+  }
+
+  void _showUpdateDialog(String version, String downloadUrl) {
+    final activeTheme = _themes[widget.themeName] ?? _themes['Dark']!;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          backgroundColor: activeTheme.cardColor,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16.0),
+            side: BorderSide(color: activeTheme.primary.withOpacity(0.3), width: 1),
+          ),
+          title: Text(
+            _locale == 'ru' ? 'Доступно обновление v$version! 🚀' : 'Update Available v$version! 🚀',
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                _locale == 'ru'
+                    ? 'Вышла новая версия RaveStreamer v$version.\nНажмите «Авто-установка» для скачивания внутри приложения!'
+                    : 'A new version of RaveStreamer v$version is available.\nTap "Auto-Install" for direct in-app download!',
+                style: const TextStyle(color: Colors.white70, fontSize: 13),
+              ),
+              const SizedBox(height: 12),
+              SelectableText(
+                downloadUrl,
+                style: const TextStyle(color: Color(0xFF00F2FE), fontSize: 11, decoration: TextDecoration.underline),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(
+                _locale == 'ru' ? 'Позже' : 'Later',
+                style: const TextStyle(color: Colors.white54),
+              ),
+            ),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: activeTheme.primary,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8.0),
+                ),
+              ),
+              icon: const Icon(Icons.downloading, size: 16),
+              onPressed: () {
+                Navigator.of(context).pop();
+                _downloadAndInstallUpdate(downloadUrl, version);
+              },
+              label: Text(
+                _locale == 'ru' ? 'Авто-установка v$version' : 'Auto-Install v$version',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _downloadAndInstallUpdate(String downloadUrl, String version) async {
+    double progress = 0.0;
+    StateSetter? dialogSetState;
+    bool isDownloading = true;
+    String statusText = _locale == 'ru' ? 'Подключение к серверу...' : 'Connecting to server...';
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (context, setState) {
+          dialogSetState = setState;
+          return AlertDialog(
+            backgroundColor: const Color(0xFF161426),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: const BorderSide(color: Color(0xFF00F2FE), width: 1),
+            ),
+            title: Row(
+              children: [
+                if (isDownloading)
+                  const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF00F2FE)))
+                else
+                  const Icon(Icons.check_circle, color: Colors.green),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    _locale == 'ru' ? 'Автообновление v$version' : 'Auto-Updating v$version',
+                    style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(statusText, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                const SizedBox(height: 12),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: LinearProgressIndicator(
+                    value: progress > 0 ? progress : null,
+                    backgroundColor: Colors.white12,
+                    color: const Color(0xFF00F2FE),
+                    minHeight: 8,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Text(
+                    '${(progress * 100).toStringAsFixed(1)}%',
+                    style: const TextStyle(color: Color(0xFF00F2FE), fontSize: 13, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+
+    try {
+      final req = http.Request('GET', Uri.parse(downloadUrl));
+      final res = await http.Client().send(req);
+      final total = res.contentLength ?? 0;
+      int received = 0;
+
+      final tempDir = Directory.systemTemp;
+      final apkPath = '${tempDir.path}/app-release.apk';
+      final apkFile = File(apkPath);
+      if (await apkFile.exists()) await apkFile.delete();
+
+      final sink = apkFile.openWrite();
+
+      await res.stream.forEach((chunk) {
+        received += chunk.length;
+        sink.add(chunk);
+        if (total > 0 && dialogSetState != null) {
+          dialogSetState!(() {
+            progress = received / total;
+            final mbReceived = (received / (1024 * 1024)).toStringAsFixed(1);
+            final mbTotal = (total / (1024 * 1024)).toStringAsFixed(1);
+            statusText = _locale == 'ru'
+                ? 'Загрузка: $mbReceived MB / $mbTotal MB'
+                : 'Downloading: $mbReceived MB / $mbTotal MB';
+          });
+        }
+      });
+
+      await sink.close();
+
+      if (dialogSetState != null) {
+        dialogSetState!(() {
+          isDownloading = false;
+          statusText = _locale == 'ru' ? 'Скачано! Запуск установки...' : 'Downloaded! Launching installer...';
+        });
+      }
+
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (mounted) Navigator.of(context).pop();
+
+      // Launch installer
+      final result = await OpenFilex.open(apkPath, type: "application/vnd.android.package-archive");
+      debugPrint('OpenFilex result: ${result.type} ${result.message}');
+      if (result.type != ResultType.done) {
+        await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
+      }
+    } catch (e) {
+      debugPrint('Auto-download error: $e');
+      if (mounted) Navigator.of(context).pop();
+      try {
+        await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
+      } catch (_) {}
+    }
   }
 
   void _showLogsDialog() {
@@ -3366,6 +4274,8 @@ class WebviewPlayer {
   final state = WebviewPlayerState();
   final stream = WebviewPlayerStream();
   bool _isInitialized = false;
+  bool _isPageReady = false;
+  Map<String, dynamic>? _pendingLoadCmd;
   HttpServer? _localServer;
   int _localPort = 0;
 
@@ -3396,7 +4306,24 @@ class WebviewPlayer {
           return;
         }
 
-        if (path == '/proxy') {
+        if (path == '/file') {
+          final filePath = request.uri.queryParameters['path'];
+          if (filePath != null && File(filePath).existsSync()) {
+            try {
+              final file = File(filePath);
+              final len = await file.length();
+              request.response.headers.contentLength = len;
+              request.response.headers.contentType = ContentType.parse('video/mp4');
+              await file.openRead().pipe(request.response);
+            } catch (e) {
+              request.response.statusCode = HttpStatus.internalServerError;
+              request.response.close();
+            }
+          } else {
+            request.response.statusCode = HttpStatus.notFound;
+            request.response.close();
+          }
+        } else if (path == '/proxy') {
           final urlParam = request.uri.queryParameters['url'];
           final cookiesParam = request.uri.queryParameters['cookies'];
           final refererParam = request.uri.queryParameters['referer'];
@@ -3511,7 +4438,15 @@ class WebviewPlayer {
           try {
             final data = jsonDecode(event) as Map<String, dynamic>;
             final type = data['type'] as String?;
-            if (type == 'state') {
+            if (type == 'ready') {
+              _isPageReady = true;
+              _logToFile('WebView HTML player is READY');
+              if (_pendingLoadCmd != null) {
+                final jsonStr = jsonEncode(_pendingLoadCmd).replaceAll("'", "\\'");
+                _pendingLoadCmd = null;
+                controller.runJavaScript("window.postMessage('$jsonStr', '*')");
+              }
+            } else if (type == 'state') {
               state.playing = data['playing'] as bool? ?? false;
               state.position = Duration(milliseconds: data['position'] as int? ?? 0);
               state.duration = Duration(milliseconds: data['duration'] as int? ?? 0);
@@ -3546,24 +4481,58 @@ class WebviewPlayer {
     }
   }
 
+  bool _isEmbedActive = false;
+
   Future<void> open(Media media, {bool play = false}) async {
     if (!_isInitialized) return;
     final headers = <String, String>{};
     if (media.httpHeaders != null) media.httpHeaders!.forEach((k, v) => headers[k] = v.toString());
 
     var playUrl = media.resource;
-    final isHttp = playUrl.startsWith('http') && !playUrl.startsWith('http://127.0.0.1');
-    final isYouTube = playUrl.contains('youtube.com') || playUrl.contains('youtu.be');
-    
-    if (isHttp && !isYouTube) {
-      final cookies = headers['Cookie'] ?? '';
-      final referer = headers['Referer'] ?? '';
-      playUrl = 'http://127.0.0.1:$_localPort/proxy?url=${Uri.encodeComponent(playUrl)}&cookies=${Uri.encodeComponent(cookies)}&referer=${Uri.encodeComponent(referer)}';
-    }
+    _logToFile('Opening media resource: $playUrl');
 
-    final cmd = {'action': 'load', 'url': playUrl, 'headers': headers, 'play': play};
-    final jsonStr = jsonEncode(cmd).replaceAll("'", "\\'");
-    await controller.runJavaScript("window.postMessage('$jsonStr', '*')");
+    final isProxyOrStream = playUrl.contains('/proxy/') || 
+                            playUrl.contains('.m3u8') || 
+                            playUrl.contains('.mp4') ||
+                            playUrl.contains('.mkv') ||
+                            playUrl.contains('.webm');
+
+    final isEmbed = !isProxyOrStream && (
+      playUrl.contains('/iframe') || 
+      playUrl.contains('video_ext.php') || 
+      playUrl.contains('rutube.ru/play') || 
+      playUrl.contains('youtube.com/embed') ||
+      playUrl.contains('vk.com/video_ext.php') ||
+      playUrl.contains('vkvideo.ru')
+    );
+
+    if (isEmbed) {
+      _isEmbedActive = true;
+      _logToFile('Detected embed / iframe URL. Loading directly in WebViewController: $playUrl');
+      await controller.loadRequest(Uri.parse(playUrl));
+    } else {
+      final isHttp = playUrl.startsWith('http') || playUrl.startsWith('https');
+      if (!isHttp) {
+        playUrl = 'http://127.0.0.1:$_localPort/file?path=${Uri.encodeComponent(playUrl)}';
+      }
+
+      final cmd = {'action': 'load', 'url': playUrl, 'headers': headers, 'play': play};
+
+      if (_isEmbedActive || !_isPageReady) {
+        _isEmbedActive = false;
+        _isPageReady = false;
+        _pendingLoadCmd = cmd;
+        _logToFile('Reloading local HTML5 player page after embed/iframe URL...');
+        if (_localPort > 0) {
+          await controller.loadRequest(Uri.parse('http://127.0.0.1:$_localPort/'));
+        } else {
+          await controller.loadHtmlString(_htmlPlayerCode);
+        }
+      } else {
+        final jsonStr = jsonEncode(cmd).replaceAll("'", "\\'");
+        await controller.runJavaScript("window.postMessage('$jsonStr', '*')");
+      }
+    }
   }
 
   Future<void> play() async {
@@ -3625,14 +4594,29 @@ const String _htmlPlayerCode = r'''
 <html>
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <style>
     body, html { margin: 0; padding: 0; width: 100%; height: 100%; background: black; overflow: hidden; }
     video { width: 100%; height: 100%; object-fit: contain; }
   </style>
-  <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1" onerror="loadFallbackHls(this)"></script>
+  <script>
+    function loadFallbackHls(script) {
+      console.log('JSDelivr CDN failed, loading fallback cdnjs...');
+      var s = document.createElement('script');
+      s.src = "https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.8/hls.min.js";
+      s.onerror = function() {
+        console.log('cdnjs failed, loading fallback unpkg...');
+        var s2 = document.createElement('script');
+        s2.src = "https://unpkg.com/hls.js@1";
+        document.head.appendChild(s2);
+      };
+      document.head.appendChild(s);
+    }
+  </script>
 </head>
 <body>
-  <video id="player" autoplay playsinline></video>
+  <video id="player" autoplay playsinline webkit-playsinline></video>
   <script>
     function postMessageToFlutter(data) {
       const str = typeof data === 'string' ? data : JSON.stringify(data);
@@ -3656,6 +4640,19 @@ const String _htmlPlayerCode = r'''
     };
 
     const video = document.getElementById('player');
+
+    function safePlay() {
+      var promise = video.play();
+      if (promise !== undefined) {
+        promise.catch(function(error) {
+          console.log('Autoplay error: ' + error.message + '. Muting and retrying...');
+          video.muted = true;
+          video.play().catch(function(err2) {
+            console.error('Final play failure: ' + err2.message);
+          });
+        });
+      }
+    }
     
     function sendState() {
       postMessageToFlutter({
@@ -3672,6 +4669,12 @@ const String _htmlPlayerCode = r'''
     video.addEventListener('timeupdate', sendState);
     video.addEventListener('durationchange', sendState);
     video.addEventListener('ended', () => postMessageToFlutter({ type: 'ended' }));
+    video.addEventListener('error', (e) => {
+      var err = video.error;
+      if (err) {
+        console.error('HTML5 Video Error code ' + err.code + ': ' + err.message);
+      }
+    });
 
     window.addEventListener('message', function(e) {
       try {
@@ -3679,20 +4682,49 @@ const String _htmlPlayerCode = r'''
         if (cmd.action === 'load') {
           video.pause();
           if (window.hls) { hls.destroy(); hls = null; }
-          const isDirect = cmd.url.includes('.mp4');
+          const isM3U8 = cmd.url.includes('.m3u8') || cmd.url.includes('/proxy/hls');
           const hasHls = typeof Hls !== 'undefined';
-          if (hasHls && Hls.isSupported() && !isDirect) {
-            window.hls = new Hls();
+          if (hasHls && Hls.isSupported() && isM3U8) {
+            console.log('Initializing HLS.js for URL: ' + cmd.url);
+            window.hls = new Hls({
+              enableWorker: true,
+              lowLatencyMode: true,
+              backBufferLength: 90
+            });
             hls.loadSource(cmd.url);
             hls.attachMedia(video);
-            hls.on(Hls.Events.MANIFEST_PARSED, () => { if (cmd.play) video.play(); });
+            hls.on(Hls.Events.MANIFEST_PARSED, () => {
+              console.log('HLS Manifest parsed successfully!');
+              if (cmd.play) safePlay();
+            });
+            hls.on(Hls.Events.ERROR, function(event, data) {
+              console.log('HLS Event Error: ' + data.type + ' / ' + data.details + ' / fatal: ' + data.fatal);
+              if (data.fatal) {
+                switch (data.type) {
+                  case Hls.ErrorTypes.NETWORK_ERROR:
+                    console.log('Fatal network error, attempting HLS reload...');
+                    hls.startLoad();
+                    break;
+                  case Hls.ErrorTypes.MEDIA_ERROR:
+                    console.log('Fatal media error, attempting media recovery...');
+                    hls.recoverMediaError();
+                    break;
+                  default:
+                    console.log('Unrecoverable HLS error, falling back to direct video.src');
+                    hls.destroy();
+                    video.src = cmd.url;
+                    if (cmd.play) safePlay();
+                    break;
+                }
+              }
+            });
           } else {
-            console.log('Loading as direct native file source: ' + cmd.url);
+            console.log('Loading direct video source: ' + cmd.url);
             video.src = cmd.url;
-            if (cmd.play) video.play();
+            if (cmd.play) safePlay();
           }
         } else if (cmd.action === 'play') {
-          video.play();
+          safePlay();
         } else if (cmd.action === 'pause') {
           video.pause();
         } else if (cmd.action === 'seek') {
@@ -3707,6 +4739,8 @@ const String _htmlPlayerCode = r'''
         });
       }
     });
+    
+    postMessageToFlutter({ type: 'ready' });
   </script>
 </body>
 </html>
