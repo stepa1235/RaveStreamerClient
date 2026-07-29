@@ -3832,13 +3832,14 @@ class _RoomPageState extends State<RoomPage> {
                   ],
                 ),
                 const SizedBox(height: 10),
-                StatefulBuilder(
-                  builder: (ctx, setLocalState) {
-                    bool _isChecking = false;
-                    return ElevatedButton.icon(
-                      onPressed: _isChecking ? null : () async {
-                        setLocalState(() => _isChecking = true);
-                        try {
+                () {
+                  bool isCheckingUpdates = false;
+                  return StatefulBuilder(
+                    builder: (ctx, setLocalState) {
+                      return ElevatedButton.icon(
+                        onPressed: isCheckingUpdates ? null : () async {
+                          setLocalState(() => isCheckingUpdates = true);
+                          try {
                           final gistRawUrl =
                               'https://gist.githubusercontent.com/stepa1235/0811a2ec6e74b06965de32f61643da5b/raw/ravestreamer.json?t=${DateTime.now().millisecondsSinceEpoch}';
                           final response = await http.get(Uri.parse(gistRawUrl)).timeout(const Duration(seconds: 8));
@@ -3909,14 +3910,14 @@ class _RoomPageState extends State<RoomPage> {
                             backgroundColor: Colors.redAccent,
                           ));
                         } finally {
-                          setLocalState(() => _isChecking = false);
+                          setLocalState(() => isCheckingUpdates = false);
                         }
                       },
-                      icon: _isChecking
+                      icon: isCheckingUpdates
                           ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                           : const Icon(Icons.system_update_alt, size: 14),
                       label: Text(
-                        _isChecking
+                        isCheckingUpdates
                             ? (_locale == 'ru' ? 'Проверка...' : 'Checking...')
                             : (_locale == 'ru' ? 'Проверить обновления' : 'Check for Updates'),
                         style: const TextStyle(fontSize: 12),
@@ -3929,7 +3930,8 @@ class _RoomPageState extends State<RoomPage> {
                       ),
                     );
                   },
-                ),
+                );
+              }(),
               ],
             ),
           ),

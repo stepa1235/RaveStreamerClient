@@ -5,7 +5,7 @@ import 'package:flutter/foundation.dart';
 class WebRTCManager {
   final IO.Socket socket;
   final String roomId;
-  final bool isHost;
+  final bool Function() isHostResolver;
   
   MediaStream? localStream;
   RTCVideoRenderer localRenderer = RTCVideoRenderer();
@@ -13,11 +13,14 @@ class WebRTCManager {
   
   // Map of viewer Socket ID -> RTCPeerConnection
   final Map<String, RTCPeerConnection> peerConnections = {};
+  final Map<String, List<Map<String, dynamic>>> _iceCandidateQueue = {};
+  final Map<String, bool> _hasRemoteDescription = {};
 
   final Map<String, dynamic> configuration = {
     'iceServers': [
       {'urls': 'stun:stun.l.google.com:19302'},
       {'urls': 'stun:stun1.l.google.com:19302'},
+      {'urls': 'stun:stun.yandex.ru:3478'},
     ]
   };
 
@@ -28,7 +31,7 @@ class WebRTCManager {
   WebRTCManager({
     required this.socket, 
     required this.roomId, 
-    required this.isHost
+    required this.isHostResolver
   });
 
   Future<void> initialize() async {
@@ -49,15 +52,14 @@ class WebRTCManager {
     int width = 1280, 
     int height = 720
   }) async {
-    if (!isHost) return;
+    if (!isHostResolver()) return;
 
     try {
       final mediaConstraints = {
-        'audio': true, // Try to capture audio
+        'audio': true,
         'video': {
+          'deviceId': {'exact': sourceId},
           'mandatory': {
-            'chromeMediaSource': 'desktop',
-            'chromeMediaSourceId': sourceId,
             'minFrameRate': fps.toString(),
             'minWidth': width.toString(),
             'minHeight': height.toString(),
@@ -68,9 +70,7 @@ class WebRTCManager {
       try {
         localStream = await navigator.mediaDevices.getDisplayMedia(mediaConstraints);
       } catch (e) {
-        debugPrint('Failed to getDisplayMedia with audio, retrying without audio: $e');
-        mediaConstraints['audio'] = false;
-        localStream = await navigator.mediaDevices.getDisplayMedia(mediaConstraints);
+        debugPrint('Failed to getDisplayMedia: $e');
       }
       localRenderer.srcObject = localStream;
       
@@ -89,7 +89,7 @@ class WebRTCManager {
   }
 
   Future<void> stopScreenShare() async {
-    if (!isHost) return;
+    if (!isHostResolver()) return;
     
     socket.emit('stop-stream', {'roomId': roomId});
     
@@ -106,7 +106,7 @@ class WebRTCManager {
 
   // Called when a new viewer joins the room (Host only)
   Future<void> createConnectionForViewer(String viewerId) async {
-    if (!isHost || localStream == null) return;
+    if (!isHostResolver() || localStream == null) return;
 
     final pc = await createPeerConnection(configuration);
     peerConnections[viewerId] = pc;
@@ -135,8 +135,8 @@ class WebRTCManager {
 
   // --- VIEWER SPECIFIC ---
 
-  Future<void> _handleOffer(data) async {
-    if (isHost && localStream != null) return; // Host shouldn't receive offers if natively streaming
+  Future<void> _handleOffer(dynamic data) async {
+    if (isHostResolver() && localStream != null) return; // Host shouldn't receive offers if natively streaming
     
     final senderId = data['senderId'];
     final offerData = data['offer'];
@@ -152,14 +152,52 @@ class WebRTCManager {
       });
     };
 
-    pc.onTrack = (event) {
-      if (event.track.kind == 'video') {
-        remoteRenderer.srcObject = event.streams[0];
-        onStreamStarted?.call();
+      pc.onTrack = (event) async {
+        debugPrint('Got remote track: ${event.track.kind}');
+        if (event.streams.isNotEmpty) {
+          if (event.track.kind == 'video' || remoteRenderer.srcObject == null) {
+            remoteRenderer.srcObject = event.streams[0];
+          }
+          // Force re-render to detect newly added tracks
+          final temp = remoteRenderer.srcObject;
+          remoteRenderer.srcObject = null;
+          remoteRenderer.srcObject = temp;
+          
+          if (event.track.kind == 'video') {
+            onStreamStarted?.call();
+          }
+        } else {
+        try {
+          if (remoteRenderer.srcObject == null) {
+            remoteRenderer.srcObject = await createLocalMediaStream('fallback_stream');
+          }
+          remoteRenderer.srcObject!.addTrack(event.track);
+          // Force re-render to detect newly added video tracks
+          final temp = remoteRenderer.srcObject;
+          remoteRenderer.srcObject = null;
+          remoteRenderer.srcObject = temp;
+        } catch (e) {
+          debugPrint('Failed to add fallback track: $e');
+        }
+        if (event.track.kind == 'video') {
+          onStreamStarted?.call();
+        }
       }
     };
 
     await pc.setRemoteDescription(RTCSessionDescription(offerData['sdp'], offerData['type']));
+    
+    _hasRemoteDescription[senderId] = true;
+    if (_iceCandidateQueue.containsKey(senderId)) {
+      for (var cData in _iceCandidateQueue[senderId]!) {
+        await pc.addCandidate(RTCIceCandidate(
+          cData['candidate'],
+          cData['sdpMid'],
+          cData['sdpMLineIndex']
+        ));
+      }
+      _iceCandidateQueue.remove(senderId);
+    }
     
     final answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
@@ -171,27 +209,44 @@ class WebRTCManager {
     });
   }
 
-  Future<void> _handleAnswer(data) async {
+  Future<void> _handleAnswer(dynamic data) async {
     final senderId = data['senderId'];
     final answerData = data['answer'];
     
     final pc = peerConnections[senderId];
     if (pc != null) {
       await pc.setRemoteDescription(RTCSessionDescription(answerData['sdp'], answerData['type']));
+      
+      _hasRemoteDescription[senderId] = true;
+      if (_iceCandidateQueue.containsKey(senderId)) {
+        for (var cData in _iceCandidateQueue[senderId]!) {
+          await pc.addCandidate(RTCIceCandidate(
+            cData['candidate'],
+            cData['sdpMid'],
+            cData['sdpMLineIndex']
+          ));
+        }
+        _iceCandidateQueue.remove(senderId);
+      }
     }
   }
 
-  Future<void> _handleIceCandidate(data) async {
+  Future<void> _handleIceCandidate(dynamic data) async {
     final senderId = data['senderId'];
     final candidateData = data['candidate'];
     
     final pc = peerConnections[senderId];
     if (pc != null) {
-      await pc.addCandidate(RTCIceCandidate(
-        candidateData['candidate'],
-        candidateData['sdpMid'],
-        candidateData['sdpMLineIndex']
-      ));
+      if (_hasRemoteDescription[senderId] == true) {
+        await pc.addCandidate(RTCIceCandidate(
+          candidateData['candidate'],
+          candidateData['sdpMid'],
+          candidateData['sdpMLineIndex']
+        ));
+      } else {
+        _iceCandidateQueue.putIfAbsent(senderId, () => []);
+        _iceCandidateQueue[senderId]!.add(candidateData);
+      }
     }
   }
 
