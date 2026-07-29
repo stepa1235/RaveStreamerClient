@@ -163,7 +163,7 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
-String globalAppVersion = "1.1.42";
+String globalAppVersion = "1.1.43";
 
 bool isNewerVersion(String latest, String current) {
   try {
@@ -567,8 +567,13 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
       final total = res.contentLength ?? 0;
       int received = 0;
 
-      final tempDir = await getTemporaryDirectory();
-      final apkPath = '${tempDir.path}/app-release.apk';
+      Directory? saveDir;
+      try {
+        saveDir = await getExternalStorageDirectory();
+      } catch (_) {}
+      saveDir ??= await getTemporaryDirectory();
+
+      final apkPath = '${saveDir.path}/RaveStreamer_v$version.apk';
       final apkFile = File(apkPath);
       if (await apkFile.exists()) await apkFile.delete();
 
@@ -602,13 +607,18 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
       if (mounted) Navigator.of(context).pop();
 
       // Launch installer
-      final result = await OpenFilex.open(apkPath, type: "application/vnd.android.package-archive");
-      debugPrint('OpenFilex result: ${result.type} - ${result.message}');
-      if (result.type != ResultType.done) {
-        try {
-          await InstallApk().installApk(apkPath);
-        } catch (e) {
-          debugPrint('InstallApk error: $e');
+      bool installed = false;
+      try {
+        await InstallApk().installApk(apkPath);
+        installed = true;
+      } catch (e) {
+        debugPrint('InstallApk error: $e');
+      }
+
+      if (!installed) {
+        final result = await OpenFilex.open(apkPath, type: "application/vnd.android.package-archive");
+        debugPrint('OpenFilex result: ${result.type} - ${result.message}');
+        if (result.type != ResultType.done) {
           await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
         }
       }
@@ -1227,8 +1237,13 @@ class _ConnectionPageState extends State<ConnectionPage> {
       final total = res.contentLength ?? 0;
       int received = 0;
 
-      final tempDir = await getTemporaryDirectory();
-      final apkPath = '${tempDir.path}/app-release.apk';
+      Directory? saveDir;
+      try {
+        saveDir = await getExternalStorageDirectory();
+      } catch (_) {}
+      saveDir ??= await getTemporaryDirectory();
+
+      final apkPath = '${saveDir.path}/RaveStreamer_v$version.apk';
       final apkFile = File(apkPath);
       if (await apkFile.exists()) await apkFile.delete();
 
@@ -1262,13 +1277,18 @@ class _ConnectionPageState extends State<ConnectionPage> {
       if (mounted) Navigator.of(context).pop();
 
       // Launch installer
-      final result = await OpenFilex.open(apkPath, type: "application/vnd.android.package-archive");
-      debugPrint('OpenFilex result: ${result.type} - ${result.message}');
-      if (result.type != ResultType.done) {
-        try {
-          await InstallApk().installApk(apkPath);
-        } catch (e) {
-          debugPrint('InstallApk error: $e');
+      bool installed = false;
+      try {
+        await InstallApk().installApk(apkPath);
+        installed = true;
+      } catch (e) {
+        debugPrint('InstallApk error: $e');
+      }
+
+      if (!installed) {
+        final result = await OpenFilex.open(apkPath, type: "application/vnd.android.package-archive");
+        debugPrint('OpenFilex result: ${result.type} - ${result.message}');
+        if (result.type != ResultType.done) {
           await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
         }
       }
@@ -4326,8 +4346,13 @@ class _RoomPageState extends State<RoomPage> {
       final total = res.contentLength ?? 0;
       int received = 0;
 
-      final tempDir = await getTemporaryDirectory();
-      final apkPath = '${tempDir.path}/app-release.apk';
+      Directory? saveDir;
+      try {
+        saveDir = await getExternalStorageDirectory();
+      } catch (_) {}
+      saveDir ??= await getTemporaryDirectory();
+
+      final apkPath = '${saveDir.path}/RaveStreamer_v$version.apk';
       final apkFile = File(apkPath);
       if (await apkFile.exists()) await apkFile.delete();
 
@@ -4361,13 +4386,18 @@ class _RoomPageState extends State<RoomPage> {
       if (mounted) Navigator.of(context).pop();
 
       // Launch installer
-      final result = await OpenFilex.open(apkPath, type: "application/vnd.android.package-archive");
-      debugPrint('OpenFilex result: ${result.type} ${result.message}');
-      if (result.type != ResultType.done) {
-        try {
-          await InstallApk().installApk(apkPath);
-        } catch (e) {
-          debugPrint('InstallApk error: $e');
+      bool installed = false;
+      try {
+        await InstallApk().installApk(apkPath);
+        installed = true;
+      } catch (e) {
+        debugPrint('InstallApk error: $e');
+      }
+
+      if (!installed) {
+        final result = await OpenFilex.open(apkPath, type: "application/vnd.android.package-archive");
+        debugPrint('OpenFilex result: ${result.type} ${result.message}');
+        if (result.type != ResultType.done) {
           await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
         }
       }
