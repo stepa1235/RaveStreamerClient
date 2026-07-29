@@ -163,7 +163,7 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
-String globalAppVersion = "1.1.41";
+String globalAppVersion = "1.1.42";
 
 bool isNewerVersion(String latest, String current) {
   try {
