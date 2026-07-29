@@ -2545,15 +2545,31 @@ class _RoomPageState extends State<RoomPage> {
     document.getElementById('startBtn').onclick = async () => {
       try {
         localStream = await navigator.mediaDevices.getDisplayMedia({
-          video: true,
-          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 2 }
+          video: {
+            displaySurface: "browser",
+            frameRate: { ideal: 30, max: 60 },
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          },
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+            channelCount: 2
+          },
+          systemAudio: "include"
         });
         
         document.getElementById('preview').srcObject = localStream;
         document.getElementById('status').innerText = 'Трансляция идет! Теперь это окно можно свернуть.';
         document.getElementById('startBtn').style.display = 'none';
 
-        // Join room
+        localStream.getVideoTracks()[0].onended = () => {
+          socket.emit('stop-stream', { roomId });
+          document.getElementById('status').innerText = 'Трансляция завершена.';
+        };
+
+        // Join room and notify server that stream started
         socket.emit('join-room', { roomId, username, password });
         socket.emit('start-stream', { roomId });
 
@@ -2561,6 +2577,13 @@ class _RoomPageState extends State<RoomPage> {
         document.getElementById('status').innerText = 'Ошибка: ' + err.message;
       }
     };
+
+    socket.on('new-viewer', async (data) => {
+      if (!localStream) return;
+      if (data.viewerId && data.viewerId !== socket.id && !peerConnections[data.viewerId]) {
+        await createOffer(data.viewerId);
+      }
+    });
 
     socket.on('room-users', async (users) => {
       if (!localStream) return;
@@ -2573,8 +2596,9 @@ class _RoomPageState extends State<RoomPage> {
 
     socket.on('user-joined', async (user) => {
       if (!localStream) return;
-      if (user.id !== socket.id && !peerConnections[user.id]) {
-        await createOffer(user.id);
+      const targetId = user.id || user;
+      if (targetId && targetId !== socket.id && !peerConnections[targetId]) {
+        await createOffer(targetId);
       }
     });
 
@@ -2789,9 +2813,9 @@ class _RoomPageState extends State<RoomPage> {
                     child: Stack(
                       fit: StackFit.expand,
                       children: [
-                        if (_isLiveStreaming)
+                        if (_isLiveStreaming && _webrtcManager != null)
                           RTCVideoView(
-                            ((_users.isNotEmpty && _users[0]['id'] == _socket.id) && _webrtcManager!.localStream != null) ? _webrtcManager!.localRenderer : _webrtcManager!.remoteRenderer,
+                            (_webrtcManager!.localStream != null) ? _webrtcManager!.localRenderer : _webrtcManager!.remoteRenderer,
                             objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
                           )
                         else if (_playerReady && _mkPlayer != null && _mkPlayer!.controller.value.isInitialized)
