@@ -163,7 +163,7 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
-String globalAppVersion = "1.1.40";
+String globalAppVersion = "1.1.41";
 
 bool isNewerVersion(String latest, String current) {
   try {
@@ -1550,7 +1550,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
                 border: Border.all(color: Colors.white.withOpacity(0.1)),
               ),
               child: Text(
-                '1.1.38',
+                globalAppVersion,
                 style: TextStyle(
                   color: Colors.white.withOpacity(0.6),
                   fontSize: 11,
@@ -2945,7 +2945,7 @@ class _RoomPageState extends State<RoomPage> {
                 borderRadius: BorderRadius.circular(6),
               ),
               child: Text(
-                '1.1.38',
+                globalAppVersion,
                 style: TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.5), fontWeight: FontWeight.bold),
               ),
             ),
