@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart' show MediaKit;
@@ -162,9 +164,179 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
+String globalAppVersion = "1.1.40";
+
+bool isNewerVersion(String latest, String current) {
+  try {
+    final cleanLatest = latest.split('+')[0];
+    final cleanCurrent = current.split('+')[0];
+    List<int> parse(String v) => v.split('.').map((e) => int.tryParse(e.replaceAll(RegExp(r'\D'), '')) ?? 0).toList();
+    final l = parse(cleanLatest);
+    final c = parse(cleanCurrent);
+    final maxLen = l.length > c.length ? l.length : c.length;
+    for (int i = 0; i < maxLen; i++) {
+      final lNum = i < l.length ? l[i] : 0;
+      final cNum = i < c.length ? c[i] : 0;
+      if (lNum > cNum) return true;
+      if (lNum < cNum) return false;
+    }
+    if (latest.contains('+') && current.contains('+')) {
+      final bLatest = int.tryParse(latest.split('+')[1]) ?? 0;
+      final bCurrent = int.tryParse(current.split('+')[1]) ?? 0;
+      if (bLatest > bCurrent) return true;
+    }
+  } catch (_) {}
+  return false;
+}
+
+Future<void> downloadAndInstallUpdateWindows(BuildContext context, String downloadUrl, String version, {String locale = 'ru'}) async {
+  double progress = 0.0;
+  StateSetter? dialogSetState;
+  bool isDownloading = true;
+  String statusText = locale == 'ru' ? 'Подключение к серверу...' : 'Connecting to server...';
+
+  showDialog(
+    context: context,
+    barrierDismissible: false,
+    builder: (dialogCtx) => StatefulBuilder(
+      builder: (context, setState) {
+        dialogSetState = setState;
+        return AlertDialog(
+          backgroundColor: const Color(0xFF161426),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: Color(0xFF00F2FE), width: 1),
+          ),
+          title: Row(
+            children: [
+              if (isDownloading)
+                const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF00F2FE)))
+              else
+                const Icon(Icons.check_circle, color: Colors.green),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  locale == 'ru' ? 'Обновление v$version' : 'Auto-Updating v$version',
+                  style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(statusText, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+              const SizedBox(height: 12),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  value: progress > 0 ? progress : null,
+                  backgroundColor: Colors.white12,
+                  color: const Color(0xFF00F2FE),
+                  minHeight: 8,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    ),
+  );
+
+  try {
+    final tempDir = Directory.systemTemp;
+    final zipPath = '${tempDir.path}\\RaveStreamer_Update.zip';
+    final zipFile = File(zipPath);
+    if (await zipFile.exists()) await zipFile.delete();
+
+    if (dialogSetState != null) {
+      dialogSetState!(() {
+        statusText = locale == 'ru' ? 'Скачивание обновления...' : 'Downloading update...';
+      });
+    }
+
+    final req = http.Request('GET', Uri.parse(downloadUrl));
+    final res = await http.Client().send(req);
+    final contentLength = res.contentLength ?? 0;
+    
+    int downloaded = 0;
+    final sink = zipFile.openWrite();
+    
+    await res.stream.forEach((chunk) {
+      sink.add(chunk);
+      downloaded += chunk.length;
+      if (contentLength > 0 && dialogSetState != null) {
+        dialogSetState!(() {
+          progress = downloaded / contentLength;
+          final mbReceived = (downloaded / (1024 * 1024)).toStringAsFixed(1);
+          final mbTotal = (contentLength / (1024 * 1024)).toStringAsFixed(1);
+          statusText = locale == 'ru'
+              ? 'Скачивание: $mbReceived MB / $mbTotal MB'
+              : 'Downloading: $mbReceived MB / $mbTotal MB';
+        });
+      }
+    });
+    await sink.flush();
+    await sink.close();
+
+    if (dialogSetState != null) {
+      dialogSetState!(() {
+        isDownloading = false;
+        statusText = locale == 'ru' ? 'Установка... Приложение будет перезапущено.' : 'Installing... App will restart.';
+      });
+    }
+
+    await Future.delayed(const Duration(milliseconds: 1000));
+
+    final scriptPath = '${tempDir.path}\\update_rave.ps1';
+    final currentExe = Platform.resolvedExecutable;
+    final exeDir = File(currentExe).parent.path;
+    
+    final psScript = '''
+Start-Sleep -Seconds 2
+\$zip = "$zipPath"
+\$dest = "$exeDir"
+\$exe = "$currentExe"
+for (\$i = 0; \$i -lt 10; \$i++) {
+    try {
+        Expand-Archive -Path \$zip -DestinationPath \$dest -Force -ErrorAction Stop
+        break
+    } catch {
+        Start-Sleep -Seconds 1
+    }
+}
+Remove-Item -Path \$zip -Force -ErrorAction SilentlyContinue
+Start-Process \$exe
+''';
+    await File(scriptPath).writeAsString(psScript);
+    
+    await Process.start(
+      'powershell', 
+      ['-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', scriptPath], 
+      mode: ProcessStartMode.detached
+    );
+    
+    exit(0);
+  } catch (e) {
+    debugPrint('Auto-download error: $e');
+    try {
+      await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
+    } catch (_) {}
+  }
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
+  
+  try {
+    PackageInfo packageInfo = await PackageInfo.fromPlatform();
+    globalAppVersion = packageInfo.version;
+  } catch (e) {
+    debugPrint('Error getting package info: $e');
+  }
+
   try {
     WakelockPlus.enable();
   } catch (e) {
@@ -321,9 +493,9 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
   void _checkForUpdates(Map<String, dynamic> jsonData) {
     if (!jsonData.containsKey('latest_version')) return;
     final latestVersion = jsonData['latest_version'] as String;
-    const String currentVersion = '1.1.17';
+    final String currentVersion = globalAppVersion;
 
-    if (latestVersion != currentVersion) {
+    if (isNewerVersion(latestVersion, currentVersion)) {
       String downloadUrl = '';
       if (Platform.isAndroid) {
         downloadUrl = jsonData['android_url'] as String? ?? '';
@@ -360,8 +532,8 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
           ),
           content: Text(
             _locale == 'ru'
-                ? 'Доступна новая версия RaveStreamer v$version (текущая 1.1.17).\nХотите обновиться?'
-                : 'A new version of RaveStreamer v$version is available (current 1.1.17).\nDo you want to update?',
+                ? 'Доступна новая версия RaveStreamer v$version (текущая v$globalAppVersion).\nХотите обновиться?'
+                : 'A new version of RaveStreamer v$version is available (current v$globalAppVersion).\nDo you want to update?',
             style: const TextStyle(color: Colors.white70),
           ),
           actions: [
@@ -383,7 +555,7 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
                 icon: const Icon(Icons.downloading, size: 16),
                 onPressed: () {
                   Navigator.of(context).pop();
-                  _downloadAndInstallUpdateWindows(downloadUrl, version);
+                  downloadAndInstallUpdateWindows(context, downloadUrl, version, locale: _locale);
                 },
                 label: Text(
                   _locale == 'ru' ? 'Авто-Обновление v$version' : 'Auto-Install v$version',
@@ -396,130 +568,7 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
       );
     }
 
-    Future<void> _downloadAndInstallUpdateWindows(String downloadUrl, String version) async {
-      double progress = 0.0;
-      StateSetter? dialogSetState;
-      bool isDownloading = true;
-      String statusText = _locale == 'ru' ? 'Подключение к серверу...' : 'Connecting to server...';
-  
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (dialogCtx) => StatefulBuilder(
-          builder: (context, setState) {
-            dialogSetState = setState;
-            return AlertDialog(
-              backgroundColor: const Color(0xFF161426),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-                side: const BorderSide(color: Color(0xFF00F2FE), width: 1),
-              ),
-              title: Row(
-                children: [
-                  if (isDownloading)
-                    const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF00F2FE)))
-                  else
-                    const Icon(Icons.check_circle, color: Colors.green),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      _locale == 'ru' ? 'Обновление v$version' : 'Auto-Updating v$version',
-                      style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                ],
-              ),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(statusText, style: const TextStyle(color: Colors.white70, fontSize: 13)),
-                  const SizedBox(height: 12),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(4),
-                    child: LinearProgressIndicator(
-                      value: progress > 0 ? progress : null,
-                      backgroundColor: Colors.white12,
-                      color: const Color(0xFF00F2FE),
-                      minHeight: 8,
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
-        ),
-      );
-  
-      try {
-        final tempDir = Directory.systemTemp;
-        final zipPath = '${tempDir.path}\\RaveStreamer_Update.zip';
-        final zipFile = File(zipPath);
-        if (await zipFile.exists()) await zipFile.delete();
-  
-        if (dialogSetState != null) {
-          dialogSetState!(() {
-            statusText = _locale == 'ru' ? 'Скачивание обновления...' : 'Downloading update...';
-          });
-        }
-  
-        final request = await HttpClient().getUrl(Uri.parse(downloadUrl));
-        final response = await request.close();
-        final contentLength = response.contentLength;
-        
-        int downloaded = 0;
-        final sink = zipFile.openWrite();
-        
-        await for (var chunk in response) {
-          sink.add(chunk);
-          downloaded += chunk.length;
-          if (contentLength > 0 && dialogSetState != null) {
-            dialogSetState!(() {
-              progress = downloaded / contentLength;
-            });
-          }
-        }
-        await sink.flush();
-        await sink.close();
-  
-        if (dialogSetState != null) {
-          dialogSetState!(() {
-            isDownloading = false;
-            statusText = _locale == 'ru' ? 'Установка... Приложение будет перезапущено.' : 'Installing... App will restart.';
-          });
-        }
-  
-        await Future.delayed(const Duration(milliseconds: 1000));
-  
-        final scriptPath = '${tempDir.path}\\update_rave.ps1';
-        final currentExe = Platform.resolvedExecutable;
-        final exeDir = File(currentExe).parent.path;
-        
-        final psScript = '''
-Start-Sleep -Seconds 2
-Expand-Archive -Path "$zipPath" -DestinationPath "$exeDir" -Force
-Start-Process "$currentExe"
-''';
-        await File(scriptPath).writeAsString(psScript);
-        
-        await Process.start(
-          'powershell', 
-          ['-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', scriptPath], 
-          mode: ProcessStartMode.detached
-        );
-        
-        exit(0);
-      } catch (e) {
-        debugPrint('Auto-download error: \$e');
-        if (mounted) Navigator.of(context).pop();
-        try {
-          await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
-        } catch (_) {}
-      }
-    }
-
-
-  Future<void> _saveAllSettings() async {
+    Future<void> _saveAllSettings() async {
     await saveSettings({
       'locale': _locale,
       'themeName': _themeName,
@@ -978,7 +1027,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
                 border: Border.all(color: Colors.white.withOpacity(0.1)),
               ),
               child: Text(
-                '1.1.17',
+                globalAppVersion,
                 style: TextStyle(
                   color: Colors.white.withOpacity(0.6),
                   fontSize: 11,
@@ -1197,6 +1246,29 @@ class _RoomPageState extends State<RoomPage> {
     super.dispose();
   }
 
+  Future<http.Response> _httpGetWithRetry(Uri uri, {Map<String, String>? headers, Duration timeout = const Duration(seconds: 120)}) async {
+    http.Response? lastResponse;
+    for (int attempt = 1; attempt <= 3; attempt++) {
+      try {
+        final res = await http.get(uri, headers: headers).timeout(timeout);
+        if (res.statusCode == 200) return res;
+        lastResponse = res;
+        if (attempt < 3 && (res.statusCode == 502 || res.statusCode == 503 || res.statusCode == 504)) {
+          await Future.delayed(Duration(milliseconds: 1500 * attempt));
+          continue;
+        }
+        return res;
+      } catch (e) {
+        if (attempt < 3) {
+          await Future.delayed(Duration(milliseconds: 1500 * attempt));
+        } else {
+          rethrow;
+        }
+      }
+    }
+    return lastResponse!;
+  }
+
   // Socket.io initialization and handlers
   void _initSocket() {
     _socket = IO.io(widget.serverUrl, IO.OptionBuilder()
@@ -1209,10 +1281,19 @@ class _RoomPageState extends State<RoomPage> {
     _webrtcManager = WebRTCManager(
       socket: _socket,
       roomId: widget.roomId,
-      isHost: Platform.isWindows,
+      isHostResolver: () => _users.isNotEmpty && _users[0]['id'] == _socket.id,
     );
     _webrtcManager!.onStreamStarted = () {
       if (mounted) setState(() { _isLiveStreaming = true; });
+      final isHost = _users.isNotEmpty && _users[0]['id'] == _socket.id;
+      if (isHost && _webrtcManager != null) {
+        for (var user in _users) {
+          final id = user['id'] as String;
+          if (id != _socket.id) {
+            _webrtcManager!.createConnectionForViewer(id);
+          }
+        }
+      }
     };
     _webrtcManager!.onStreamStopped = () {
       if (mounted) setState(() { _isLiveStreaming = false; });
@@ -1222,7 +1303,10 @@ class _RoomPageState extends State<RoomPage> {
     _socket.connect();
 
     _socket.on('stream-started', (_) {
-      if (mounted) setState(() { _isLiveStreaming = true; });
+      if (mounted) {
+        setState(() { _isLiveStreaming = true; });
+        _triggerControlsVisibility();
+      }
     });
     _socket.on('stream-stopped', (_) {
       if (mounted) setState(() { _isLiveStreaming = false; });
@@ -1342,7 +1426,8 @@ class _RoomPageState extends State<RoomPage> {
     _socket.on('room-users', (data) {
       if (_isDisposed || !mounted) return;
       
-      if (_webrtcManager != null && _webrtcManager!.isHost && _isLiveStreaming) {
+      final isHost = _users.isNotEmpty && _users[0]['id'] == _socket.id;
+      if (_webrtcManager != null && isHost && _isLiveStreaming) {
         final currentIds = _users.map((u) => u['id'] as String).toSet();
         for (var user in data) {
           final id = user['id'] as String;
@@ -1576,6 +1661,8 @@ class _RoomPageState extends State<RoomPage> {
       _isPlayerVisible = true;
     });
 
+    _triggerControlsVisibility();
+
     String playUrl = url;
     final lowercaseUrl = url.toLowerCase();
     final isYouTube = lowercaseUrl.contains('youtube.com') || lowercaseUrl.contains('youtu.be');
@@ -1628,10 +1715,10 @@ class _RoomPageState extends State<RoomPage> {
       }
       try {
         final extractUri = Uri.parse('${widget.serverUrl}/extract?url=${Uri.encodeComponent(url)}');
-        final response = await http.get(
+        final response = await _httpGetWithRetry(
           extractUri,
           headers: {'bypass-tunnel-reminder': 'true'},
-        ).timeout(const Duration(seconds: 120));
+        );
 
         if (response.statusCode == 200) {
           final data = jsonDecode(response.body) as Map<String, dynamic>;
@@ -1899,10 +1986,10 @@ class _RoomPageState extends State<RoomPage> {
         
         try {
           final extractUri = Uri.parse('${widget.serverUrl}/extract?url=${Uri.encodeComponent(url)}');
-          final response = await http.get(
+          final response = await _httpGetWithRetry(
             extractUri,
             headers: {'bypass-tunnel-reminder': 'true'},
-          ).timeout(const Duration(seconds: 120));
+          );
           
           if (response.statusCode == 200) {
             final data = jsonDecode(response.body) as Map<String, dynamic>;
@@ -1911,7 +1998,8 @@ class _RoomPageState extends State<RoomPage> {
               final rawUrl = data['url'] as String;
               // If it's a relative proxy path, make it absolute with the server URL
               if (rawUrl.startsWith('/')) {
-                finalUrl = '${widget.serverUrl}$rawUrl';
+                final serverBase = widget.serverUrl.replaceAll('wss://', 'https://').replaceAll('ws://', 'http://');
+                finalUrl = '$serverBase$rawUrl';
               } else {
                 finalUrl = rawUrl;
               }
@@ -1988,17 +2076,18 @@ class _RoomPageState extends State<RoomPage> {
         
         try {
           final extractUri = Uri.parse('${widget.serverUrl}/extract?url=${Uri.encodeComponent(url)}');
-          final response = await http.get(
+          final response = await _httpGetWithRetry(
             extractUri,
             headers: {'bypass-tunnel-reminder': 'true'},
-          ).timeout(const Duration(seconds: 120));
+          );
           
           if (response.statusCode == 200) {
             final data = jsonDecode(response.body) as Map<String, dynamic>;
             if (data['success'] == true && data['url'] != null) {
               final rawUrl = data['url'] as String;
               if (rawUrl.startsWith('/')) {
-                finalUrl = '${widget.serverUrl}$rawUrl';
+                final serverBase = widget.serverUrl.replaceAll('wss://', 'https://').replaceAll('ws://', 'http://');
+                finalUrl = '$serverBase$rawUrl';
               } else {
                 finalUrl = rawUrl;
               }
@@ -2441,9 +2530,13 @@ class _RoomPageState extends State<RoomPage> {
     const config = {
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' }
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun.yandex.ru:3478' }
       ]
     };
+
+    let iceCandidateQueue = {};
+    let hasRemoteDescription = {};
 
     socket.on('connect', () => {
       document.getElementById('status').innerText = 'Подключено к серверу, нажмите кнопку чтобы выбрать вкладку.';
@@ -2478,6 +2571,20 @@ class _RoomPageState extends State<RoomPage> {
       }
     });
 
+    socket.on('user-joined', async (user) => {
+      if (!localStream) return;
+      if (user.id !== socket.id && !peerConnections[user.id]) {
+        await createOffer(user.id);
+      }
+    });
+
+    socket.on('user-left', (data) => {
+      if (peerConnections[data.id]) {
+        peerConnections[data.id].close();
+        delete peerConnections[data.id];
+      }
+    });
+
     async function createOffer(targetId) {
       const pc = new RTCPeerConnection(config);
       peerConnections[targetId] = pc;
@@ -2493,18 +2600,32 @@ class _RoomPageState extends State<RoomPage> {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       
-      socket.emit('webrtc-offer', { targetId, offer, roomId });
+      socket.emit('webrtc-offer', { targetId, senderId: socket.id, offer, roomId });
     }
 
     socket.on('webrtc-answer', async (data) => {
-      if (data.targetId === socket.id && peerConnections[data.senderId]) {
-        await peerConnections[data.senderId].setRemoteDescription(new RTCSessionDescription(data.answer));
+      if (peerConnections[data.senderId]) {
+        const pc = peerConnections[data.senderId];
+        await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+        hasRemoteDescription[data.senderId] = true;
+        if (iceCandidateQueue[data.senderId]) {
+          for (const candidate of iceCandidateQueue[data.senderId]) {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+          }
+          delete iceCandidateQueue[data.senderId];
+        }
       }
     });
 
     socket.on('webrtc-ice-candidate', async (data) => {
-      if (data.targetId === socket.id && peerConnections[data.senderId]) {
-        await peerConnections[data.senderId].addIceCandidate(new RTCIceCandidate(data.candidate));
+      if (peerConnections[data.senderId]) {
+        const pc = peerConnections[data.senderId];
+        if (hasRemoteDescription[data.senderId]) {
+          await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+        } else {
+          if (!iceCandidateQueue[data.senderId]) iceCandidateQueue[data.senderId] = [];
+          iceCandidateQueue[data.senderId].push(data.candidate);
+        }
       }
     });
 
@@ -2542,7 +2663,7 @@ class _RoomPageState extends State<RoomPage> {
     });
     _controlsTimer?.cancel();
     _controlsTimer = Timer(const Duration(seconds: 4), () {
-      if (mounted && (_mkPlayer?.state.playing ?? false)) {
+      if (mounted && ((_mkPlayer?.state.playing ?? false) || _isLiveStreaming)) {
         setState(() {
           _showControls = false;
         });
@@ -2589,7 +2710,7 @@ class _RoomPageState extends State<RoomPage> {
                 borderRadius: BorderRadius.circular(6),
               ),
               child: Text(
-                '1.1.17',
+                globalAppVersion,
                 style: TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.5), fontWeight: FontWeight.bold),
               ),
             ),
@@ -2660,7 +2781,9 @@ class _RoomPageState extends State<RoomPage> {
             child: Stack(
               fit: StackFit.expand,
               children: [
-                GestureDetector(
+                MouseRegion(
+                  onHover: (_) => _triggerControlsVisibility(),
+                  child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
                     onTap: _triggerControlsVisibility,
                     child: Stack(
@@ -2668,7 +2791,7 @@ class _RoomPageState extends State<RoomPage> {
                       children: [
                         if (_isLiveStreaming)
                           RTCVideoView(
-                            (_webrtcManager!.isHost && _webrtcManager!.localStream != null) ? _webrtcManager!.localRenderer : _webrtcManager!.remoteRenderer,
+                            ((_users.isNotEmpty && _users[0]['id'] == _socket.id) && _webrtcManager!.localStream != null) ? _webrtcManager!.localRenderer : _webrtcManager!.remoteRenderer,
                             objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
                           )
                         else if (_playerReady && _mkPlayer != null && _mkPlayer!.controller.value.isInitialized)
@@ -2689,6 +2812,7 @@ class _RoomPageState extends State<RoomPage> {
                       ],
                     ),
                   ),
+                ),
               ],
             ),
           ),
@@ -3047,11 +3171,27 @@ class _RoomPageState extends State<RoomPage> {
                     style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 8),
-                  ElevatedButton.icon(
-                    onPressed: () {
-                      if (_isLiveStreaming) {
+                  if (_isLiveStreaming)
+                    ElevatedButton.icon(
+                      onPressed: () {
+                        _socket.emit('stop-stream', {'roomId': widget.roomId});
                         _webrtcManager?.stopScreenShare();
-                      } else {
+                        setState(() { _isLiveStreaming = false; });
+                      },
+                      icon: const Icon(Icons.stop_screen_share, size: 18),
+                      label: Text(
+                        _locale == 'ru' ? 'Остановить стрим' : 'Stop Stream',
+                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.redAccent,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                    )
+                  else ...[
+                    ElevatedButton.icon(
+                      onPressed: () {
                         showDialog(
                           context: context,
                           builder: (ctx) => Dialog(
@@ -3059,6 +3199,8 @@ class _RoomPageState extends State<RoomPage> {
                             child: ScreenPickerWidget(
                               onSourceSelected: (sourceId, fps, res) {
                                 Navigator.pop(ctx);
+                                setState(() { _isLiveStreaming = true; });
+                                _socket.emit('start-stream', {'roomId': widget.roomId});
                                 _webrtcManager?.startScreenShare(
                                   sourceId: sourceId,
                                   fps: fps,
@@ -3069,45 +3211,38 @@ class _RoomPageState extends State<RoomPage> {
                             ),
                           ),
                         );
-                      }
-                    },
-                    icon: Icon(_isLiveStreaming ? Icons.stop_screen_share : Icons.screen_share, size: 18),
-                    label: Text(
-                      _isLiveStreaming 
-                        ? (_locale == 'ru' ? 'Остановить стрим' : 'Stop Stream')
-                        : (_locale == 'ru' ? 'Начать стрим экрана' : 'Share Screen'),
-                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: _isLiveStreaming ? Colors.redAccent : const Color(0xFF00F2FE),
-                      foregroundColor: Colors.black,
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  if (isMeHost)
-                    ElevatedButton.icon(
-                      onPressed: () {
-                        if (_isLiveStreaming) {
-                          _socket.emit('stop-stream', {'roomId': widget.roomId});
-                          _webrtcManager?.stopScreenShare();
-                        } else {
-                          _startBrowserBroadcast();
-                        }
                       },
-                      icon: Icon(_isLiveStreaming ? Icons.stop_screen_share : Icons.tab, size: 18),
+                      icon: const Icon(Icons.screen_share, size: 18),
                       label: Text(
-                        _locale == 'ru' 
-                          ? (_isLiveStreaming ? 'Остановить стрим' : 'Трансляция из вкладки') 
-                          : (_isLiveStreaming ? 'Stop Stream' : 'Stream Browser Tab'),
+                        _locale == 'ru' ? 'Начать стрим экрана' : 'Share Screen',
                         style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
                       ),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: _isLiveStreaming ? Colors.redAccent : const Color(0xFF6C63FF),
-                        foregroundColor: Colors.white,
+                        backgroundColor: const Color(0xFF00F2FE),
+                        foregroundColor: Colors.black,
                         padding: const EdgeInsets.symmetric(vertical: 12),
                       ),
                     ),
+                    const SizedBox(height: 8),
+                    if (isMeHost)
+                      ElevatedButton.icon(
+                        onPressed: () {
+                          setState(() { _isLiveStreaming = true; });
+                          _socket.emit('start-stream', {'roomId': widget.roomId});
+                          _startBrowserBroadcast();
+                        },
+                        icon: const Icon(Icons.tab, size: 18),
+                        label: Text(
+                          _locale == 'ru' ? 'Трансляция из вкладки' : 'Stream Browser Tab',
+                          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF6C63FF),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                        ),
+                      ),
+                  ],
                 ],
               ),
             ),
@@ -3690,7 +3825,7 @@ class _RoomPageState extends State<RoomPage> {
                         borderRadius: BorderRadius.circular(6),
                       ),
                       child: Text(
-                        '1.1.17',
+                        '1.1.38',
                         style: TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.5), fontWeight: FontWeight.bold),
                       ),
                     ),
@@ -3710,8 +3845,8 @@ class _RoomPageState extends State<RoomPage> {
                           if (response.statusCode == 200) {
                             final jsonData = jsonDecode(response.body) as Map<String, dynamic>;
                             final latestVersion = jsonData['latest_version'] as String? ?? '';
-                            const currentVersion = '1.1.17';
-                            if (latestVersion.isNotEmpty && latestVersion != currentVersion) {
+                            final currentVersion = globalAppVersion;
+                            if (latestVersion.isNotEmpty && isNewerVersion(latestVersion, currentVersion)) {
                               String downloadUrl = '';
                               if (Platform.isAndroid) {
                                 downloadUrl = jsonData['android_url'] as String? ?? '';
@@ -3728,8 +3863,8 @@ class _RoomPageState extends State<RoomPage> {
                                     style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                                   content: Text(
                                     _locale == 'ru'
-                                        ? 'Доступна новая версия v$latestVersion (текущая v1.1.2).\nХотите обновиться?'
-                                        : 'A new version v$latestVersion is available (current v1.1.2).\nDo you want to update?',
+                                        ? 'Доступна новая версия v$latestVersion (текущая v$globalAppVersion).\nХотите обновиться?'
+                                        : 'A new version v$latestVersion is available (current v$globalAppVersion).\nDo you want to update?',
                                     style: const TextStyle(color: Colors.white70),
                                   ),
                                   actions: [
@@ -3738,19 +3873,21 @@ class _RoomPageState extends State<RoomPage> {
                                       child: Text(_locale == 'ru' ? 'Позже' : 'Later',
                                         style: const TextStyle(color: Colors.white54)),
                                     ),
-                                    TextButton(
+                                    ElevatedButton.icon(
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: const Color(0xFF6C63FF),
+                                        foregroundColor: Colors.white,
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                      ),
+                                      icon: const Icon(Icons.downloading, size: 16),
                                       onPressed: () async {
                                         Navigator.of(ctx).pop();
                                         if (downloadUrl.isNotEmpty) {
-                                          try {
-                                            await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
-                                          } catch (e) {
-                                            debugPrint('Could not launch update URL: $e');
-                                          }
+                                          downloadAndInstallUpdateWindows(context, downloadUrl, latestVersion, locale: _locale);
                                         }
                                       },
-                                      child: Text(_locale == 'ru' ? 'Обновить' : 'Update',
-                                        style: const TextStyle(color: Color(0xFF00F2FE), fontWeight: FontWeight.bold)),
+                                      label: Text(_locale == 'ru' ? 'Авто-Обновление v$latestVersion' : 'Auto-Install v$latestVersion',
+                                        style: const TextStyle(fontWeight: FontWeight.bold)),
                                     ),
                                   ],
                                 ),
@@ -3758,7 +3895,7 @@ class _RoomPageState extends State<RoomPage> {
                             } else {
                               if (!mounted) return;
                               ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                                content: Text(_locale == 'ru' ? 'У вас установлена последняя версия (1.1.17).' : 'You have the latest version (1.1.17).'),
+                                content: Text(_locale == 'ru' ? 'У вас установлена последняя версия (v$globalAppVersion).' : 'You have the latest version (v$globalAppVersion).'),
                                 backgroundColor: Colors.green,
                               ));
                             }
@@ -4058,6 +4195,7 @@ class WebviewPlayer {
           
           try {
             final client = HttpClient();
+            client.badCertificateCallback = (cert, host, port) => true;
             var targetUri = Uri.parse(urlParam);
             HttpClientRequest? targetRequest;
             HttpClientResponse? targetResponse;
@@ -4480,15 +4618,22 @@ const String _htmlPlayerCode = r'''
             hls = null;
           }
 
-          const isDirectFile = url.includes('.mp4') || url.includes('.webm') || url.includes('.ogg') || url.includes('googlevideo.com') || url.includes('vk.com') || url.includes('vkuser') || url.includes('vk-cdn');
-          if (typeof Hls !== 'undefined' && Hls.isSupported() && !isDirectFile) {
+          const urlLower = url.toLowerCase();
+          const isHls = urlLower.includes('.m3u8') || urlLower.includes('%2em3u8');
+          const hasHls = typeof Hls !== 'undefined';
+          if (hasHls && Hls.isSupported() && isHls) {
             console.log('Loading as HLS stream using Hls.js: ' + url);
             hls = new Hls({
               xhrSetup: function(xhr, segmentUrl) {
+                try {
+                  xhr.setRequestHeader('bypass-tunnel-reminder', 'true');
+                } catch(_) {}
                 if (cmd.headers) {
                   for (const key in cmd.headers) {
                     if (key.toLowerCase() !== 'host' && key.toLowerCase() !== 'user-agent') {
-                      xhr.setRequestHeader(key, cmd.headers[key]);
+                      try {
+                        xhr.setRequestHeader(key, cmd.headers[key]);
+                      } catch(_) {}
                     }
                   }
                 }
@@ -4501,11 +4646,24 @@ const String _htmlPlayerCode = r'''
               if (cmd.play) video.play();
             });
             hls.on(Hls.Events.ERROR, function(event, data) {
-              console.log('HLS.js error event: ' + data.details + ' fatal=' + data.fatal);
-              window.chrome.webview.postMessage(JSON.stringify({
-                type: 'error',
-                message: 'HLS error: ' + data.details
-              }));
+              console.log('HLS.js error event: ' + data.type + ' / ' + data.details + ' fatal=' + data.fatal);
+              if (data.fatal) {
+                switch(data.type) {
+                  case Hls.ErrorTypes.NETWORK_ERROR:
+                    console.log('Fatal network error, attempting HLS reload...');
+                    hls.startLoad();
+                    break;
+                  case Hls.ErrorTypes.MEDIA_ERROR:
+                    console.log('Fatal media error, attempting media recovery...');
+                    hls.recoverMediaError();
+                    break;
+                  default:
+                    hls.destroy();
+                    video.src = url;
+                    if (cmd.play) video.play();
+                    break;
+                }
+              }
             });
           } else {
             console.log('Loading as direct native file source: ' + url);

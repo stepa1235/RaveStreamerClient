@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart' show MediaKit;
@@ -15,6 +17,7 @@ import 'package:youtube_explode_dart/youtube_explode_dart.dart' hide Video;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:open_filex/open_filex.dart';
+import 'package:apk_sideload/install_apk.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart' hide Webview;
 import 'webrtc_manager.dart';
 
@@ -160,9 +163,41 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
+String globalAppVersion = "1.1.40";
+
+bool isNewerVersion(String latest, String current) {
+  try {
+    final cleanLatest = latest.split('+')[0];
+    final cleanCurrent = current.split('+')[0];
+    List<int> parse(String v) => v.split('.').map((e) => int.tryParse(e.replaceAll(RegExp(r'\D'), '')) ?? 0).toList();
+    final l = parse(cleanLatest);
+    final c = parse(cleanCurrent);
+    final maxLen = l.length > c.length ? l.length : c.length;
+    for (int i = 0; i < maxLen; i++) {
+      final lNum = i < l.length ? l[i] : 0;
+      final cNum = i < c.length ? c[i] : 0;
+      if (lNum > cNum) return true;
+      if (lNum < cNum) return false;
+    }
+    if (latest.contains('+') && current.contains('+')) {
+      final bLatest = int.tryParse(latest.split('+')[1]) ?? 0;
+      final bCurrent = int.tryParse(current.split('+')[1]) ?? 0;
+      if (bLatest > bCurrent) return true;
+    }
+  } catch (_) {}
+  return false;
+}
+
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
+  try {
+    PackageInfo packageInfo = await PackageInfo.fromPlatform();
+    globalAppVersion = packageInfo.version;
+  } catch (e) {
+    debugPrint('Error getting package info: $e');
+  }
   runApp(const RaveStreamerApp());
 }
 
@@ -235,6 +270,13 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
   @override
   void initState() {
     super.initState();
+    Helper.setAndroidAudioConfiguration(AndroidAudioConfiguration(
+      manageAudioFocus: true,
+      androidAudioMode: AndroidAudioMode.normal,
+      androidAudioStreamType: AndroidAudioStreamType.music,
+      androidAudioAttributesUsageType: AndroidAudioAttributesUsageType.media,
+      androidAudioAttributesContentType: AndroidAudioAttributesContentType.movie,
+    ));
     _loadAllSettings();
   }
 
@@ -264,10 +306,13 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
     final gistRawUrl =
         'https://gist.githubusercontent.com/stepa1235/0811a2ec6e74b06965de32f61643da5b/raw/ravestreamer.json?t=${DateTime.now().millisecondsSinceEpoch}';
     try {
-      final response = await http.get(
-        Uri.parse(gistRawUrl),
-        headers: {'Cache-Control': 'no-cache', 'Pragma': 'no-cache'},
-      ).timeout(const Duration(seconds: 8));
+      var response = await http.get(Uri.parse('https://api.github.com/gists/0811a2ec6e74b06965de32f61643da5b'), headers: {'Cache-Control': 'no-cache'}).timeout(const Duration(seconds: 4));
+        if (response.statusCode == 200) {
+          final jsonApi = jsonDecode(response.body) as Map<String, dynamic>;
+          response = http.Response(jsonApi['files']['ravestreamer.json']['content'], 200);
+        } else {
+          response = await http.get(Uri.parse(gistRawUrl)).timeout(const Duration(seconds: 4));
+        }
 
       if (response.statusCode == 200) {
         final jsonData = jsonDecode(response.body) as Map<String, dynamic>;
@@ -319,10 +364,13 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
   Future<void> _fetchVersionFromServer(String dummy, {bool verbose = false}) async {
     try {
       final gistRawUrl = 'https://gist.githubusercontent.com/stepa1235/0811a2ec6e74b06965de32f61643da5b/raw/ravestreamer.json?t=${DateTime.now().millisecondsSinceEpoch}';
-      final res = await http.get(
-        Uri.parse(gistRawUrl),
-        headers: {'Cache-Control': 'no-cache'},
-      ).timeout(const Duration(seconds: 6));
+      var res = await http.get(Uri.parse('https://api.github.com/gists/0811a2ec6e74b06965de32f61643da5b'), headers: {'Cache-Control': 'no-cache'}).timeout(const Duration(seconds: 4));
+        if (res.statusCode == 200) {
+          final jsonApi = jsonDecode(res.body) as Map<String, dynamic>;
+          res = http.Response(jsonApi['files']['ravestreamer.json']['content'], 200);
+        } else {
+          res = await http.get(Uri.parse(gistRawUrl)).timeout(const Duration(seconds: 4));
+        }
 
       if (res.statusCode == 200) {
         final jsonData = jsonDecode(res.body) as Map<String, dynamic>;
@@ -344,9 +392,9 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
   void _checkForUpdates(Map<String, dynamic> jsonData, {bool verbose = false}) {
     if (!jsonData.containsKey('latest_version')) return;
     final latestVersion = jsonData['latest_version'] as String;
-    const String currentVersion = '1.1.17';
+    final String currentVersion = globalAppVersion;
 
-    if (latestVersion != currentVersion) {
+    if (isNewerVersion(latestVersion, currentVersion)) {
       String downloadUrl = '';
       if (Platform.isAndroid) {
         downloadUrl = jsonData['android_url'] as String? ?? '';
@@ -366,8 +414,8 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
         SnackBar(
           content: Text(
             _locale == 'ru'
-                ? 'У вас установлена последняя версия v1.1.18! ✨'
-                : 'You are using the latest version v1.1.18! ✨',
+                ? 'У вас установлена последняя версия v$globalAppVersion! ✨'
+                : 'You are using the latest version v$globalAppVersion! ✨',
           ),
           backgroundColor: Colors.green,
         ),
@@ -378,7 +426,10 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
   void _showUpdateDialog(String version, String downloadUrl) {
     final activeTheme = _themes[_themeName] ?? _themes['Dark']!;
     final context = _navigatorKey.currentContext;
-    if (context == null) return;
+    if (context == null) {
+      Future.delayed(const Duration(seconds: 1), () => _showUpdateDialog(version, downloadUrl));
+      return;
+    }
     
     showDialog(
       context: context,
@@ -429,9 +480,11 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
               ),
               icon: const Icon(Icons.downloading, size: 16),
               onPressed: () {
-                Navigator.of(context).pop();
-                _downloadAndInstallUpdate(downloadUrl, version);
-              },
+                  Navigator.of(context).pop();
+                  Future.delayed(const Duration(milliseconds: 300), () {
+                    _downloadAndInstallUpdate(downloadUrl, version);
+                  });
+                },
               label: Text(
                 _locale == 'ru' ? 'Авто-установка v$version' : 'Auto-Install v$version',
                 style: const TextStyle(fontWeight: FontWeight.bold),
@@ -444,13 +497,15 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
   }
 
   Future<void> _downloadAndInstallUpdate(String downloadUrl, String version) async {
+    final navContext = _navigatorKey.currentContext;
+    if (navContext == null) return;
     double progress = 0.0;
     StateSetter? dialogSetState;
     bool isDownloading = true;
     String statusText = _locale == 'ru' ? 'Подключение к серверу...' : 'Connecting to server...';
 
     showDialog(
-      context: context,
+      context: navContext ?? context,
       barrierDismissible: false,
       builder: (dialogCtx) => StatefulBuilder(
         builder: (context, setState) {
@@ -512,7 +567,7 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
       final total = res.contentLength ?? 0;
       int received = 0;
 
-      final tempDir = await getExternalStorageDirectory() ?? await getTemporaryDirectory();
+      final tempDir = await getTemporaryDirectory();
       final apkPath = '${tempDir.path}/app-release.apk';
       final apkFile = File(apkPath);
       if (await apkFile.exists()) await apkFile.delete();
@@ -547,16 +602,22 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
       if (mounted) Navigator.of(context).pop();
 
       // Launch installer
-      final fileUri = Uri.file(apkPath);
-      final webUri = Uri.parse(downloadUrl);
-      if (await canLaunchUrl(fileUri)) {
-        await launchUrl(fileUri);
-      } else {
-        await launchUrl(webUri, mode: LaunchMode.externalApplication);
+      final result = await OpenFilex.open(apkPath, type: "application/vnd.android.package-archive");
+      debugPrint('OpenFilex result: ${result.type} - ${result.message}');
+      if (result.type != ResultType.done) {
+        try {
+          await InstallApk().installApk(apkPath);
+        } catch (e) {
+          debugPrint('InstallApk error: $e');
+          await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
+        }
       }
     } catch (e) {
       debugPrint('Auto-download error: $e');
       if (mounted) Navigator.of(context).pop();
+      if (mounted) {
+         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Download failed: $e. Opening browser...')));
+      }
       try {
         await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
       } catch (_) {}
@@ -737,7 +798,13 @@ class _ConnectionPageState extends State<ConnectionPage> {
     try {
       final gistRawUrl =
           'https://gist.githubusercontent.com/stepa1235/0811a2ec6e74b06965de32f61643da5b/raw/ravestreamer.json?t=${DateTime.now().millisecondsSinceEpoch}';
-      final response = await http.get(Uri.parse(gistRawUrl)).timeout(const Duration(seconds: 3));
+      var response = await http.get(Uri.parse('https://api.github.com/gists/0811a2ec6e74b06965de32f61643da5b'), headers: {'Cache-Control': 'no-cache'}).timeout(const Duration(seconds: 4));
+        if (response.statusCode == 200) {
+          final jsonApi = jsonDecode(response.body) as Map<String, dynamic>;
+          response = http.Response(jsonApi['files']['ravestreamer.json']['content'], 200);
+        } else {
+          response = await http.get(Uri.parse(gistRawUrl)).timeout(const Duration(seconds: 4));
+        }
       if (response.statusCode == 200) {
         final jsonData = jsonDecode(response.body) as Map<String, dynamic>;
         if (jsonData.containsKey('url')) {
@@ -917,11 +984,11 @@ class _ConnectionPageState extends State<ConnectionPage> {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Row(
-                        children: [
-                          Icon(Icons.system_update, size: 16, color: Color(0xFF00F2FE)),
+                      Row(
+                          children: [
+                            const Icon(Icons.system_update, size: 16, color: Color(0xFF00F2FE)),
                           SizedBox(width: 8),
-                          Text('О приложении (1.1.17)', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+                          Text('${widget.locale == 'ru' ? 'О приложении' : 'About'} ($globalAppVersion)', style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
                         ],
                       ),
                       ElevatedButton(
@@ -947,10 +1014,13 @@ class _ConnectionPageState extends State<ConnectionPage> {
   Future<void> _fetchVersionFromServer(String dummy, {bool verbose = false}) async {
     try {
       final gistRawUrl = 'https://gist.githubusercontent.com/stepa1235/0811a2ec6e74b06965de32f61643da5b/raw/ravestreamer.json?t=${DateTime.now().millisecondsSinceEpoch}';
-      final res = await http.get(
-        Uri.parse(gistRawUrl),
-        headers: {'Cache-Control': 'no-cache'},
-      ).timeout(const Duration(seconds: 6));
+      var res = await http.get(Uri.parse('https://api.github.com/gists/0811a2ec6e74b06965de32f61643da5b'), headers: {'Cache-Control': 'no-cache'}).timeout(const Duration(seconds: 4));
+        if (res.statusCode == 200) {
+          final jsonApi = jsonDecode(res.body) as Map<String, dynamic>;
+          res = http.Response(jsonApi['files']['ravestreamer.json']['content'], 200);
+        } else {
+          res = await http.get(Uri.parse(gistRawUrl)).timeout(const Duration(seconds: 4));
+        }
 
       if (res.statusCode == 200) {
         final jsonData = jsonDecode(res.body) as Map<String, dynamic>;
@@ -971,9 +1041,11 @@ class _ConnectionPageState extends State<ConnectionPage> {
 
   bool _isNewerVersion(String latest, String current) {
     try {
+      final cleanLatest = latest.split('+')[0];
+      final cleanCurrent = current.split('+')[0];
       List<int> parse(String v) => v.split('.').map((e) => int.tryParse(e.replaceAll(RegExp(r'\D'), '')) ?? 0).toList();
-      final l = parse(latest);
-      final c = parse(current);
+      final l = parse(cleanLatest);
+      final c = parse(cleanCurrent);
       final maxLen = l.length > c.length ? l.length : c.length;
       for (int i = 0; i < maxLen; i++) {
         final lNum = i < l.length ? l[i] : 0;
@@ -988,7 +1060,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
   void _checkForUpdates(Map<String, dynamic> jsonData, {bool verbose = false}) {
     if (!jsonData.containsKey('latest_version')) return;
     final latestVersion = jsonData['latest_version'] as String;
-    const String currentVersion = '1.1.17';
+    final String currentVersion = globalAppVersion;
 
     if (_isNewerVersion(latestVersion, currentVersion)) {
       String downloadUrl = '';
@@ -1010,8 +1082,8 @@ class _ConnectionPageState extends State<ConnectionPage> {
         SnackBar(
           content: Text(
             widget.locale == 'ru'
-                ? 'У вас установлена последняя версия v1.1.18! ✨'
-                : 'You are using the latest version v1.1.18! ✨',
+                ? 'У вас установлена последняя версия v$globalAppVersion! ✨'
+                : 'You are using the latest version v$globalAppVersion! ✨',
           ),
           backgroundColor: Colors.green,
         ),
@@ -1070,11 +1142,13 @@ class _ConnectionPageState extends State<ConnectionPage> {
               ),
               icon: const Icon(Icons.downloading, size: 16),
               onPressed: () {
-                Navigator.of(context).pop();
-                _downloadAndInstallUpdate(downloadUrl, version);
-              },
+                  Navigator.of(context).pop();
+                  Future.delayed(const Duration(milliseconds: 300), () {
+                    _downloadAndInstallUpdate(downloadUrl, version);
+                  });
+                },
               label: Text(
-                widget.locale == 'ru' ? 'Авто-установка v$version' : 'Auto-Install v$version',
+                widget.locale == 'ru' ? 'Скачать v$version' : 'Download v$version',
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
             ),
@@ -1153,7 +1227,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
       final total = res.contentLength ?? 0;
       int received = 0;
 
-      final tempDir = await getExternalStorageDirectory() ?? await getTemporaryDirectory();
+      final tempDir = await getTemporaryDirectory();
       final apkPath = '${tempDir.path}/app-release.apk';
       final apkFile = File(apkPath);
       if (await apkFile.exists()) await apkFile.delete();
@@ -1189,13 +1263,21 @@ class _ConnectionPageState extends State<ConnectionPage> {
 
       // Launch installer
       final result = await OpenFilex.open(apkPath, type: "application/vnd.android.package-archive");
-      debugPrint('OpenFilex result: ${result.type} ${result.message}');
+      debugPrint('OpenFilex result: ${result.type} - ${result.message}');
       if (result.type != ResultType.done) {
-        await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
+        try {
+          await InstallApk().installApk(apkPath);
+        } catch (e) {
+          debugPrint('InstallApk error: $e');
+          await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
+        }
       }
     } catch (e) {
       debugPrint('Auto-download error: $e');
       if (mounted) Navigator.of(context).pop();
+      if (mounted) {
+         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Download failed: $e. Opening browser...')));
+      }
       try {
         await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
       } catch (_) {}
@@ -1468,7 +1550,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
                 border: Border.all(color: Colors.white.withOpacity(0.1)),
               ),
               child: Text(
-                '1.1.17',
+                '1.1.38',
                 style: TextStyle(
                   color: Colors.white.withOpacity(0.6),
                   fontSize: 11,
@@ -1631,7 +1713,7 @@ class _RoomPageState extends State<RoomPage> {
     });
 
     // Connection timeout check
-    Timer(const Duration(seconds: 8), () {
+    Timer(const Duration(seconds: 35), () {
       if (mounted && !_hasJoinedRoom) {
         showDialog(
           context: context,
@@ -1679,6 +1761,29 @@ class _RoomPageState extends State<RoomPage> {
     super.dispose();
   }
 
+  Future<http.Response> _httpGetWithRetry(Uri uri, {Map<String, String>? headers, Duration timeout = const Duration(seconds: 120)}) async {
+    http.Response? lastResponse;
+    for (int attempt = 1; attempt <= 3; attempt++) {
+      try {
+        final res = await http.get(uri, headers: headers).timeout(timeout);
+        if (res.statusCode == 200) return res;
+        lastResponse = res;
+        if (attempt < 3 && (res.statusCode == 502 || res.statusCode == 503 || res.statusCode == 504)) {
+          await Future.delayed(Duration(milliseconds: 1500 * attempt));
+          continue;
+        }
+        return res;
+      } catch (e) {
+        if (attempt < 3) {
+          await Future.delayed(Duration(milliseconds: 1500 * attempt));
+        } else {
+          rethrow;
+        }
+      }
+    }
+    return lastResponse!;
+  }
+
   // Socket.io initialization and handlers
   void _initSocket() {
     _socket = IO.io(widget.serverUrl, IO.OptionBuilder()
@@ -1691,7 +1796,7 @@ class _RoomPageState extends State<RoomPage> {
     _webrtcManager = WebRTCManager(
       socket: _socket,
       roomId: widget.roomId,
-      isHost: false, // Android can't host streams yet
+      isHostResolver: () => false, // Android can't host streams yet
     );
     _webrtcManager!.onStreamStarted = () {
       if (mounted) setState(() { _isLiveStreaming = true; });
@@ -1841,6 +1946,22 @@ class _RoomPageState extends State<RoomPage> {
       if (videoUrl.isNotEmpty) {
         _setupVideoPlayer(videoUrl, videoName, startPlaying: isPlaying, startSeconds: calculatedTime, headers: headers);
       }
+    });
+
+    _socket.on('stream-started', (_) {
+      if (mounted) {
+        setState(() { _isLiveStreaming = true; });
+        _triggerControlsVisibility();
+      }
+    });
+
+    _socket.on('stream-stopped', (_) {
+      if (mounted) setState(() { 
+        _isLiveStreaming = false; 
+        if (_webrtcManager != null) {
+          _webrtcManager!.remoteRenderer.srcObject = null;
+        }
+      });
     });
 
     // Handle video change event
@@ -2020,6 +2141,8 @@ class _RoomPageState extends State<RoomPage> {
       _isPlayerVisible = true;
     });
 
+    _triggerControlsVisibility();
+
     String playUrl = url;
     final lowercaseUrl = url.toLowerCase();
     final isYouTube = lowercaseUrl.contains('youtube.com') || lowercaseUrl.contains('youtu.be');
@@ -2072,10 +2195,10 @@ class _RoomPageState extends State<RoomPage> {
       }
       try {
         final extractUri = Uri.parse('${widget.serverUrl}/extract?url=${Uri.encodeComponent(url)}');
-        final response = await http.get(
+        final response = await _httpGetWithRetry(
           extractUri,
           headers: {'bypass-tunnel-reminder': 'true'},
-        ).timeout(const Duration(seconds: 120));
+        );
 
         if (response.statusCode == 200) {
           final data = jsonDecode(response.body) as Map<String, dynamic>;
@@ -2181,7 +2304,27 @@ class _RoomPageState extends State<RoomPage> {
     String finalUrl = url.trim();
     String finalName = name.trim().isEmpty ? 'Web Stream' : name.trim();
     
-    final lowercaseUrl = url.toLowerCase();
+    // Resolve VK videos via proxy to get direct MP4/HLS
+    if (finalUrl.contains('vk.com/video_ext.php') || finalUrl.contains('vkvideo.ru')) {
+      final serverBase = widget.serverUrl.replaceAll('wss://', 'https://').replaceAll('ws://', 'http://');
+      final proxyUrl = '$serverBase/extract?url=${Uri.encodeComponent(finalUrl)}';
+      try {
+        final response = await http.get(Uri.parse(proxyUrl));
+        if (response.statusCode == 200) {
+          final proxyData = jsonDecode(response.body);
+          if (proxyData['url'] != null) {
+            finalUrl = proxyData['url'];
+            if (finalUrl.startsWith('/')) {
+              finalUrl = '$serverBase$finalUrl';
+            }
+          }
+        }
+      } catch (e) {
+        debugPrint('Failed to resolve VK video via extract: $e');
+      }
+    }
+    
+    final lowercaseUrl = finalUrl.toLowerCase();
     final isWebLink = lowercaseUrl.startsWith('http://') || lowercaseUrl.startsWith('https://');
     
     Map<String, dynamic>? finalHeaders;
@@ -2212,10 +2355,10 @@ class _RoomPageState extends State<RoomPage> {
         
         try {
           final extractUri = Uri.parse('${widget.serverUrl}/extract?url=${Uri.encodeComponent(url)}');
-          final response = await http.get(
+          final response = await _httpGetWithRetry(
             extractUri,
             headers: {'bypass-tunnel-reminder': 'true'},
-          ).timeout(const Duration(seconds: 120));
+          );
           
           if (response.statusCode == 200) {
             final data = jsonDecode(response.body) as Map<String, dynamic>;
@@ -2272,7 +2415,27 @@ class _RoomPageState extends State<RoomPage> {
     String finalUrl = url.trim();
     String finalName = name.trim().isEmpty ? 'Web Stream' : name.trim();
     
-    final lowercaseUrl = url.toLowerCase();
+    // Resolve VK videos via proxy to get direct MP4/HLS
+    if (finalUrl.contains('vk.com/video_ext.php') || finalUrl.contains('vkvideo.ru')) {
+      final serverBase = widget.serverUrl.replaceAll('wss://', 'https://').replaceAll('ws://', 'http://');
+      final proxyUrl = '$serverBase/extract?url=${Uri.encodeComponent(finalUrl)}';
+      try {
+        final response = await http.get(Uri.parse(proxyUrl));
+        if (response.statusCode == 200) {
+          final proxyData = jsonDecode(response.body);
+          if (proxyData['url'] != null) {
+            finalUrl = proxyData['url'];
+            if (finalUrl.startsWith('/')) {
+              finalUrl = '$serverBase$finalUrl';
+            }
+          }
+        }
+      } catch (e) {
+        debugPrint('Failed to resolve VK queue via extract: $e');
+      }
+    }
+    
+    final lowercaseUrl = finalUrl.toLowerCase();
     final isWebLink = lowercaseUrl.startsWith('http://') || lowercaseUrl.startsWith('https://');
     
     Map<String, dynamic>? finalHeaders;
@@ -2301,10 +2464,10 @@ class _RoomPageState extends State<RoomPage> {
         
         try {
           final extractUri = Uri.parse('${widget.serverUrl}/extract?url=${Uri.encodeComponent(url)}');
-          final response = await http.get(
+          final response = await _httpGetWithRetry(
             extractUri,
             headers: {'bypass-tunnel-reminder': 'true'},
-          ).timeout(const Duration(seconds: 120));
+          );
           
           if (response.statusCode == 200) {
             final data = jsonDecode(response.body) as Map<String, dynamic>;
@@ -2734,7 +2897,7 @@ class _RoomPageState extends State<RoomPage> {
     });
     _controlsTimer?.cancel();
     _controlsTimer = Timer(const Duration(seconds: 3), () {
-      if (mounted && (_mkPlayer?.state.playing ?? false)) {
+      if (mounted && ((_mkPlayer?.state.playing ?? false) || _isLiveStreaming)) {
         setState(() {
           _showControls = false;
         });
@@ -2782,7 +2945,7 @@ class _RoomPageState extends State<RoomPage> {
                 borderRadius: BorderRadius.circular(6),
               ),
               child: Text(
-                '1.1.17',
+                '1.1.38',
                 style: TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.5), fontWeight: FontWeight.bold),
               ),
             ),
@@ -2894,7 +3057,7 @@ class _RoomPageState extends State<RoomPage> {
                           child: _buildVideoControlsOverlay(),
                         ),
                         // Show placeholder when no video is loaded
-                        if (_currentVideoUrl.isEmpty)
+                        if (_currentVideoUrl.isEmpty && !_isLiveStreaming)
                           _buildEmptyState(),
                       ],
                     ),
@@ -3910,13 +4073,13 @@ class _RoomPageState extends State<RoomPage> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Row(
-                  children: [
-                    Icon(Icons.system_update, size: 16, color: Color(0xFF00F2FE)),
+                Row(
+                          children: [
+                            const Icon(Icons.system_update, size: 16, color: Color(0xFF00F2FE)),
                     SizedBox(width: 8),
                     Text(
-                      'О приложении (1.1.17)',
-                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                      '${_locale == 'ru' ? 'О приложении' : 'About'} ($globalAppVersion)',
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
                     ),
                   ],
                 ),
@@ -3950,10 +4113,13 @@ class _RoomPageState extends State<RoomPage> {
   Future<void> _fetchVersionFromServer(String dummy, {bool verbose = false}) async {
     try {
       final gistRawUrl = 'https://gist.githubusercontent.com/stepa1235/0811a2ec6e74b06965de32f61643da5b/raw/ravestreamer.json?t=${DateTime.now().millisecondsSinceEpoch}';
-      final res = await http.get(
-        Uri.parse(gistRawUrl),
-        headers: {'Cache-Control': 'no-cache'},
-      ).timeout(const Duration(seconds: 6));
+      var res = await http.get(Uri.parse('https://api.github.com/gists/0811a2ec6e74b06965de32f61643da5b'), headers: {'Cache-Control': 'no-cache'}).timeout(const Duration(seconds: 4));
+        if (res.statusCode == 200) {
+          final jsonApi = jsonDecode(res.body) as Map<String, dynamic>;
+          res = http.Response(jsonApi['files']['ravestreamer.json']['content'], 200);
+        } else {
+          res = await http.get(Uri.parse(gistRawUrl)).timeout(const Duration(seconds: 4));
+        }
 
       if (res.statusCode == 200) {
         final jsonData = jsonDecode(res.body) as Map<String, dynamic>;
@@ -3974,9 +4140,11 @@ class _RoomPageState extends State<RoomPage> {
 
   bool _isNewerVersion(String latest, String current) {
     try {
+      final cleanLatest = latest.split('+')[0];
+      final cleanCurrent = current.split('+')[0];
       List<int> parse(String v) => v.split('.').map((e) => int.tryParse(e.replaceAll(RegExp(r'\D'), '')) ?? 0).toList();
-      final l = parse(latest);
-      final c = parse(current);
+      final l = parse(cleanLatest);
+      final c = parse(cleanCurrent);
       final maxLen = l.length > c.length ? l.length : c.length;
       for (int i = 0; i < maxLen; i++) {
         final lNum = i < l.length ? l[i] : 0;
@@ -3991,7 +4159,7 @@ class _RoomPageState extends State<RoomPage> {
   void _checkForUpdates(Map<String, dynamic> jsonData, {bool verbose = false}) {
     if (!jsonData.containsKey('latest_version')) return;
     final latestVersion = jsonData['latest_version'] as String;
-    const String currentVersion = '1.1.17';
+    final String currentVersion = globalAppVersion;
 
     if (_isNewerVersion(latestVersion, currentVersion)) {
       String downloadUrl = '';
@@ -4013,8 +4181,8 @@ class _RoomPageState extends State<RoomPage> {
         SnackBar(
           content: Text(
             _locale == 'ru'
-                ? 'У вас установлена последняя версия v1.1.18! ✨'
-                : 'You are using the latest version v1.1.18! ✨',
+                ? 'У вас установлена последняя версия v$globalAppVersion! ✨'
+                : 'You are using the latest version v$globalAppVersion! ✨',
           ),
           backgroundColor: Colors.green,
         ),
@@ -4073,9 +4241,11 @@ class _RoomPageState extends State<RoomPage> {
               ),
               icon: const Icon(Icons.downloading, size: 16),
               onPressed: () {
-                Navigator.of(context).pop();
-                _downloadAndInstallUpdate(downloadUrl, version);
-              },
+                  Navigator.of(context).pop();
+                  Future.delayed(const Duration(milliseconds: 300), () {
+                    _downloadAndInstallUpdate(downloadUrl, version);
+                  });
+                },
               label: Text(
                 _locale == 'ru' ? 'Авто-установка v$version' : 'Auto-Install v$version',
                 style: const TextStyle(fontWeight: FontWeight.bold),
@@ -4156,7 +4326,7 @@ class _RoomPageState extends State<RoomPage> {
       final total = res.contentLength ?? 0;
       int received = 0;
 
-      final tempDir = await getExternalStorageDirectory() ?? await getTemporaryDirectory();
+      final tempDir = await getTemporaryDirectory();
       final apkPath = '${tempDir.path}/app-release.apk';
       final apkFile = File(apkPath);
       if (await apkFile.exists()) await apkFile.delete();
@@ -4194,11 +4364,19 @@ class _RoomPageState extends State<RoomPage> {
       final result = await OpenFilex.open(apkPath, type: "application/vnd.android.package-archive");
       debugPrint('OpenFilex result: ${result.type} ${result.message}');
       if (result.type != ResultType.done) {
-        await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
+        try {
+          await InstallApk().installApk(apkPath);
+        } catch (e) {
+          debugPrint('InstallApk error: $e');
+          await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
+        }
       }
     } catch (e) {
       debugPrint('Auto-download error: $e');
       if (mounted) Navigator.of(context).pop();
+      if (mounted) {
+         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Download failed: $e. Opening browser...')));
+      }
       try {
         await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
       } catch (_) {}
@@ -4549,6 +4727,7 @@ class WebviewPlayer {
           
           try {
             final client = HttpClient();
+            client.badCertificateCallback = (cert, host, port) => true;
             var targetUri = Uri.parse(urlParam);
             HttpClientRequest? targetRequest;
             HttpClientResponse? targetResponse;
@@ -4893,14 +5072,27 @@ const String _htmlPlayerCode = r'''
         if (cmd.action === 'load') {
           video.pause();
           if (window.hls) { hls.destroy(); hls = null; }
-          const isM3U8 = cmd.url.includes('.m3u8') || cmd.url.includes('/proxy/hls');
+          const urlLower = cmd.url.toLowerCase();
+          const isM3U8 = urlLower.includes('.m3u8') || urlLower.includes('%2em3u8');
           const hasHls = typeof Hls !== 'undefined';
           if (hasHls && Hls.isSupported() && isM3U8) {
             console.log('Initializing HLS.js for URL: ' + cmd.url);
             window.hls = new Hls({
               enableWorker: true,
               lowLatencyMode: true,
-              backBufferLength: 90
+              backBufferLength: 90,
+              xhrSetup: function(xhr, segmentUrl) {
+                try {
+                  xhr.setRequestHeader('bypass-tunnel-reminder', 'true');
+                } catch(_) {}
+                if (cmd.headers) {
+                  for (const key in cmd.headers) {
+                    if (key.toLowerCase() !== 'host' && key.toLowerCase() !== 'user-agent') {
+                      try { xhr.setRequestHeader(key, cmd.headers[key]); } catch(_) {}
+                    }
+                  }
+                }
+              }
             });
             hls.loadSource(cmd.url);
             hls.attachMedia(video);
@@ -4956,6 +5148,14 @@ const String _htmlPlayerCode = r'''
 </body>
 </html>
 ''';
+
+
+
+
+
+
+
+
 
 
 
