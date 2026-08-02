@@ -170,8 +170,17 @@ class WebRTCManager {
 
       pc.onTrack = (event) async {
         debugPrint('Got remote track: ${event.track.kind}');
+        if (remoteRenderer.srcObject == null) {
+          try {
+            remoteRenderer.srcObject = await createLocalMediaStream('remote_stream_${DateTime.now().millisecondsSinceEpoch}');
+          } catch (e) {
+            debugPrint('Failed to create remote stream: $e');
+          }
+        }
         if (event.streams.isNotEmpty) {
           remoteRenderer.srcObject = event.streams[0];
+        } else if (remoteRenderer.srcObject != null) {
+          remoteRenderer.srcObject!.addTrack(event.track);
         }
         if (Platform.isAndroid || Platform.isIOS) {
           try { Helper.setSpeakerphoneOn(true); } catch (_) {}
