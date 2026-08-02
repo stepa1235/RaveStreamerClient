@@ -70,6 +70,16 @@ class MainActivity : FlutterActivity() {
                         result.error("INSTALL_ERROR", e.message, null)
                     }
                 }
+                "setMediaAudioMode" -> {
+                    try {
+                        val audioManager = getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
+                        audioManager.mode = android.media.AudioManager.MODE_NORMAL
+                        audioManager.isSpeakerphoneOn = true
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("AUDIO_ERROR", e.message, null)
+                    }
+                }
                 else -> result.notImplemented()
             }
         }

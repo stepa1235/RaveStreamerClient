@@ -163,7 +163,7 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
-String globalAppVersion = "1.1.50";
+String globalAppVersion = "1.1.51";
 
 bool isNewerVersion(String latest, String current) {
   try {
@@ -2424,6 +2424,23 @@ class _RoomPageState extends State<RoomPage> {
     return embedUrl;
   }
 
+  void _clearPlayer() {
+    _socket.emit('change-video', {
+      'roomId': widget.roomId,
+      'videoUrl': '',
+      'videoName': 'No Video Loaded'
+    });
+    _socket.emit('stop-stream', {
+      'roomId': widget.roomId
+    });
+    setState(() {
+      _currentVideoUrl = '';
+      _currentVideoName = 'No Video Loaded';
+      _isLiveStreaming = false;
+      _mkPlayer?.pause();
+    });
+  }
+
   // Send video change event to server
   void _changeVideo(String url, String name) async {
     if (url.trim().isEmpty) return;
@@ -3642,6 +3659,21 @@ class _RoomPageState extends State<RoomPage> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
+                    if (_currentVideoUrl.isNotEmpty || _isLiveStreaming) ...[
+                      OutlinedButton.icon(
+                        onPressed: _clearPlayer,
+                        icon: const Icon(Icons.cleaning_services, size: 14, color: Colors.redAccent),
+                        label: Text(
+                          _locale == 'ru' ? 'Очистить плеер' : 'Clear Player',
+                          style: const TextStyle(fontSize: 11, color: Colors.redAccent, fontWeight: FontWeight.bold),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          side: const BorderSide(color: Colors.redAccent),
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                    ],
                     // Watch button (auto queues if already playing)
                     ElevatedButton(
                       onPressed: () {

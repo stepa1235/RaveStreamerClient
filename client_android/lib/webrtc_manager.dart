@@ -1,6 +1,7 @@
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'dart:io';
 
 class WebRTCManager {
@@ -183,7 +184,10 @@ class WebRTCManager {
           remoteRenderer.srcObject!.addTrack(event.track);
         }
         if (Platform.isAndroid || Platform.isIOS) {
-          try { Helper.setSpeakerphoneOn(true); } catch (_) {}
+          try {
+            Helper.setSpeakerphoneOn(true);
+            MethodChannel('com.example.client/permissions').invokeMethod('setMediaAudioMode');
+          } catch (_) {}
         }
         onStreamStarted?.call();
       };
