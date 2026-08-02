@@ -163,7 +163,7 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
-String globalAppVersion = "1.1.49";
+String globalAppVersion = "1.1.50";
 
 bool isNewerVersion(String latest, String current) {
   try {
@@ -1035,23 +1035,65 @@ class _ConnectionPageState extends State<ConnectionPage> {
 
   Future<void> _fetchVersionFromServer(String dummy, {bool verbose = false}) async {
     try {
-      final gistRawUrl = 'https://gist.githubusercontent.com/stepa1235/0811a2ec6e74b06965de32f61643da5b/raw/ravestreamer.json?t=${DateTime.now().millisecondsSinceEpoch}';
-      var res = await http.get(Uri.parse('https://api.github.com/gists/0811a2ec6e74b06965de32f61643da5b'), headers: {'Cache-Control': 'no-cache'}).timeout(const Duration(seconds: 4));
-        if (res.statusCode == 200) {
-          final jsonApi = jsonDecode(res.body) as Map<String, dynamic>;
-          res = http.Response(jsonApi['files']['ravestreamer.json']['content'], 200);
-        } else {
-          res = await http.get(Uri.parse(gistRawUrl)).timeout(const Duration(seconds: 4));
+      final releaseRes = await http.get(
+        Uri.parse('https://api.github.com/repos/stepa1235/RaveStreamerClient/releases/latest'),
+        headers: {
+          'User-Agent': 'RaveStreamerApp/1.0',
+          'Accept': 'application/vnd.github.v3+json',
+          'Cache-Control': 'no-cache',
+        },
+      ).timeout(const Duration(seconds: 5));
+
+      if (releaseRes.statusCode == 200) {
+        final releaseData = jsonDecode(releaseRes.body) as Map<String, dynamic>;
+        final tagName = (releaseData['tag_name'] as String? ?? '').replaceAll('v', '');
+        final assets = (releaseData['assets'] as List<dynamic>? ?? []);
+        
+        String apkUrl = '';
+        String winUrl = '';
+        for (var asset in assets) {
+          final name = asset['name'] as String? ?? '';
+          final url = asset['browser_download_url'] as String? ?? '';
+          if (name.endsWith('.apk')) apkUrl = url;
+          if (name.endsWith('.zip')) winUrl = url;
         }
 
-      if (res.statusCode == 200) {
-        final jsonData = jsonDecode(res.body) as Map<String, dynamic>;
-        _checkForUpdates(jsonData, verbose: verbose);
-        return;
+        if (tagName.isNotEmpty) {
+          final jsonData = {
+            'latest_version': tagName,
+            'android_url': apkUrl.isNotEmpty ? apkUrl : 'https://github.com/stepa1235/RaveStreamerClient/releases/latest/download/RaveStreamer.apk',
+            'windows_url': winUrl.isNotEmpty ? winUrl : 'https://github.com/stepa1235/RaveStreamerClient/releases/latest/download/RaveStreamer-Windows.zip',
+          };
+          _checkForUpdates(jsonData, verbose: verbose);
+          return;
+        }
       }
     } catch (e) {
-      debugPrint('Could not fetch version from Gist: $e');
+      debugPrint('GitHub Releases API check error: $e');
     }
+
+    try {
+      final gistRes = await http.get(
+        Uri.parse('https://api.github.com/gists/0811a2ec6e74b06965de32f61643da5b'),
+        headers: {
+          'User-Agent': 'RaveStreamerApp/1.0',
+          'Cache-Control': 'no-cache',
+        },
+      ).timeout(const Duration(seconds: 5));
+
+      if (gistRes.statusCode == 200) {
+        final jsonApi = jsonDecode(gistRes.body) as Map<String, dynamic>;
+        final content = jsonApi['files']?['ravestreamer.json']?['content'] as String?;
+        if (content != null) {
+          final jsonData = jsonDecode(content) as Map<String, dynamic>;
+          _checkForUpdates(jsonData, verbose: verbose);
+          return;
+        }
+      }
+    } catch (e) {
+      debugPrint('Gist check error: $e');
+    }
+
     if (verbose && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(

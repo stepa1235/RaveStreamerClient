@@ -164,7 +164,7 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
-String globalAppVersion = "1.1.49";
+String globalAppVersion = "1.1.50";
 
 bool isNewerVersion(String latest, String current) {
   try {
@@ -451,6 +451,43 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
   }
 
   Future<void> _fetchServerUrlFromGist() async {
+    try {
+      final releaseRes = await http.get(
+        Uri.parse('https://api.github.com/repos/stepa1235/RaveStreamerClient/releases/latest'),
+        headers: {
+          'User-Agent': 'RaveStreamerApp/1.0',
+          'Accept': 'application/vnd.github.v3+json',
+          'Cache-Control': 'no-cache',
+        },
+      ).timeout(const Duration(seconds: 5));
+
+      if (releaseRes.statusCode == 200) {
+        final releaseData = jsonDecode(releaseRes.body) as Map<String, dynamic>;
+        final tagName = (releaseData['tag_name'] as String? ?? '').replaceAll('v', '');
+        final assets = (releaseData['assets'] as List<dynamic>? ?? []);
+        
+        String apkUrl = '';
+        String winUrl = '';
+        for (var asset in assets) {
+          final name = asset['name'] as String? ?? '';
+          final url = asset['browser_download_url'] as String? ?? '';
+          if (name.endsWith('.apk')) apkUrl = url;
+          if (name.endsWith('.zip')) winUrl = url;
+        }
+
+        if (tagName.isNotEmpty) {
+          final jsonData = {
+            'latest_version': tagName,
+            'android_url': apkUrl.isNotEmpty ? apkUrl : 'https://github.com/stepa1235/RaveStreamerClient/releases/latest/download/RaveStreamer.apk',
+            'windows_url': winUrl.isNotEmpty ? winUrl : 'https://github.com/stepa1235/RaveStreamerClient/releases/latest/download/RaveStreamer-Windows.zip',
+          };
+          _checkForUpdates(jsonData);
+        }
+      }
+    } catch (e) {
+      debugPrint('GitHub Releases API update check error: $e');
+    }
+
     final gistRawUrl =
         'https://gist.githubusercontent.com/stepa1235/0811a2ec6e74b06965de32f61643da5b/raw/ravestreamer.json?t=${DateTime.now().millisecondsSinceEpoch}';
     try {

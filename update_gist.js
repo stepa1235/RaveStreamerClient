@@ -8,7 +8,7 @@ const data = JSON.stringify({
     'ravestreamer.json': {
       content: JSON.stringify({
         url: "https://ravestreamer-stepa-server.loca.lt",
-        latest_version: "1.1.49",
+        latest_version: "1.1.50",
         windows_url: "https://github.com/stepa1235/RaveStreamerClient/releases/latest/download/RaveStreamer-Windows.zip",
         android_url: "https://github.com/stepa1235/RaveStreamerClient/releases/latest/download/RaveStreamer.apk"
       }, null, 2)
