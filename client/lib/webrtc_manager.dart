@@ -152,38 +152,18 @@ class WebRTCManager {
       });
     };
 
+      pc.onAddStream = (stream) {
+        remoteRenderer.srcObject = stream;
+        onStreamStarted?.call();
+      };
+
       pc.onTrack = (event) async {
         debugPrint('Got remote track: ${event.track.kind}');
         if (event.streams.isNotEmpty) {
-          if (event.track.kind == 'video' || remoteRenderer.srcObject == null) {
-            remoteRenderer.srcObject = event.streams[0];
-          }
-          // Force re-render to detect newly added tracks
-          final temp = remoteRenderer.srcObject;
-          remoteRenderer.srcObject = null;
-          remoteRenderer.srcObject = temp;
-          
-          if (event.track.kind == 'video') {
-            onStreamStarted?.call();
-          }
-        } else {
-        try {
-          if (remoteRenderer.srcObject == null) {
-            remoteRenderer.srcObject = await createLocalMediaStream('fallback_stream');
-          }
-          remoteRenderer.srcObject!.addTrack(event.track);
-          // Force re-render to detect newly added video tracks
-          final temp = remoteRenderer.srcObject;
-          remoteRenderer.srcObject = null;
-          remoteRenderer.srcObject = temp;
-        } catch (e) {
-          debugPrint('Failed to add fallback track: $e');
+          remoteRenderer.srcObject = event.streams[0];
         }
-        if (event.track.kind == 'video') {
-          onStreamStarted?.call();
-        }
-      }
-    };
+        onStreamStarted?.call();
+      };
 
     await pc.setRemoteDescription(RTCSessionDescription(offerData['sdp'], offerData['type']));
     

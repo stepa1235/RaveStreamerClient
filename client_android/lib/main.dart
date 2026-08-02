@@ -163,7 +163,7 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
-String globalAppVersion = "1.1.44";
+String globalAppVersion = "1.1.45";
 
 bool isNewerVersion(String latest, String current) {
   try {
@@ -1944,6 +1944,30 @@ class _RoomPageState extends State<RoomPage> {
       setState(() {
         _users = (data as List).where((u) => !(u['username'] as String).endsWith('\u200B')).toList();
       });
+    });
+
+    _socket.on('user-joined', (data) {
+      if (_isDisposed || !mounted) return;
+      final newUser = data is Map<String, dynamic> ? data : (data is Map ? Map<String, dynamic>.from(data) : null);
+      if (newUser != null) {
+        final username = newUser['username'] as String? ?? '';
+        if (!username.endsWith('\u200B')) {
+          setState(() {
+            _users.removeWhere((u) => u['id'] == newUser['id']);
+            _users.add(newUser);
+          });
+        }
+      }
+    });
+
+    _socket.on('user-left', (data) {
+      if (_isDisposed || !mounted) return;
+      final userId = data is Map ? data['id'] as String? : null;
+      if (userId != null) {
+        setState(() {
+          _users.removeWhere((u) => u['id'] == userId);
+        });
+      }
     });
 
     // Handle initial room state when joining
