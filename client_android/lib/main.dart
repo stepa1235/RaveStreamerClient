@@ -163,7 +163,7 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
-String globalAppVersion = "1.1.45";
+String globalAppVersion = "1.1.46";
 
 bool isNewerVersion(String latest, String current) {
   try {
@@ -765,12 +765,24 @@ class _ConnectionPageState extends State<ConnectionPage> {
   @override
   void initState() {
     super.initState();
+    _requestInstallPermissionOnStartup();
     _serverController = TextEditingController(
       text: widget.initialServerUrl.isNotEmpty ? widget.initialServerUrl : 'https://ravestreamer-stepa-server.loca.lt',
     );
     _usernameController = TextEditingController(
       text: widget.initialUsername.isNotEmpty ? widget.initialUsername : 'User_${(1000 + (DateTime.now().millisecond % 9000))}',
     );
+  }
+
+  Future<void> _requestInstallPermissionOnStartup() async {
+    if (Platform.isAndroid) {
+      try {
+        const platform = MethodChannel('com.example.client/permissions');
+        await platform.invokeMethod('requestInstallPermission');
+      } catch (e) {
+        debugPrint('Install permission request error: $e');
+      }
+    }
   }
 
   @override
@@ -1732,8 +1744,8 @@ class _RoomPageState extends State<RoomPage> {
       _sendPeriodicSync();
     });
 
-    // Connection timeout check
-    Timer(const Duration(seconds: 35), () {
+    // Connection timeout check (90 seconds for server wakeup)
+    Timer(const Duration(seconds: 90), () {
       if (mounted && !_hasJoinedRoom) {
         showDialog(
           context: context,
@@ -1741,22 +1753,41 @@ class _RoomPageState extends State<RoomPage> {
           builder: (ctx) => AlertDialog(
             backgroundColor: const Color(0xFF2A2D3E),
             title: Text(
-              _locale == 'ru' ? 'Ошибка подключения' : 'Connection Error',
-              style: const TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold),
+              _locale == 'ru' ? 'Подключение задерживается' : 'Connection Delay',
+              style: const TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold),
             ),
             content: Text(
               _locale == 'ru' 
-                ? 'Сервер недоступен или устарела ссылка Localtunnel.'
-                : 'Server is unreachable or Localtunnel link expired.',
+                ? 'Сервер подключается дольше обычного (пробуждение сервера)... Вы можете подождать или продолжить.'
+                : 'Server is taking longer to connect (server waking up)... You can wait or continue anyway.',
               style: const TextStyle(color: Colors.white70),
             ),
             actions: [
               TextButton(
                 onPressed: () {
-                  Navigator.pop(ctx); // Close dialog
-                  if (mounted) Navigator.pop(context); // Go back to connection page
+                  Navigator.pop(ctx);
+                  if (mounted) Navigator.pop(context);
                 },
-                child: const Text('OK', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                child: Text(_locale == 'ru' ? 'Выйти' : 'Exit', style: const TextStyle(color: Colors.white54)),
+              ),
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  _socket.connect();
+                },
+                child: Text(_locale == 'ru' ? 'Повторить' : 'Retry', style: const TextStyle(color: Color(0xFF00F2FE))),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF6C63FF)),
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  if (mounted) {
+                    setState(() {
+                      _hasJoinedRoom = true;
+                    });
+                  }
+                },
+                child: Text(_locale == 'ru' ? 'Всё равно продолжить' : 'Continue anyway', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
               ),
             ],
           ),
