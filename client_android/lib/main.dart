@@ -163,7 +163,7 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
-String globalAppVersion = "1.1.46";
+String globalAppVersion = "1.1.47";
 
 bool isNewerVersion(String latest, String current) {
   try {
@@ -1288,13 +1288,23 @@ class _ConnectionPageState extends State<ConnectionPage> {
       await Future.delayed(const Duration(milliseconds: 500));
       if (mounted) Navigator.of(context).pop();
 
-      // Launch installer
+      // Launch native Android FileProvider package installer
       bool installed = false;
       try {
-        await InstallApk().installApk(apkPath);
-        installed = true;
+        const platform = MethodChannel('com.example.client/permissions');
+        final res = await platform.invokeMethod('installApk', {'filePath': apkPath});
+        installed = res == true;
       } catch (e) {
-        debugPrint('InstallApk error: $e');
+        debugPrint('Native installApk error: $e');
+      }
+
+      if (!installed) {
+        try {
+          await InstallApk().installApk(apkPath);
+          installed = true;
+        } catch (e) {
+          debugPrint('InstallApk error: $e');
+        }
       }
 
       if (!installed) {
