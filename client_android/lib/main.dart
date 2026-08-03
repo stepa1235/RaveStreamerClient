@@ -163,7 +163,7 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
-String globalAppVersion = "1.1.54";
+String globalAppVersion = "1.1.55";
 
 bool isNewerVersion(String latest, String current) {
   try {
@@ -2463,8 +2463,13 @@ class _RoomPageState extends State<RoomPage> {
     String finalUrl = url.trim();
     String finalName = name.trim().isEmpty ? 'Web Stream' : name.trim();
     
-    // Resolve VK videos via proxy to get direct MP4/HLS
-    if (finalUrl.contains('vk.com/video_ext.php') || finalUrl.contains('vkvideo.ru')) {
+    // Resolve VK/OK videos via proxy to get direct MP4/HLS
+    final lowerCheck = finalUrl.toLowerCase();
+    if (lowerCheck.contains('vk.com/video') ||
+        lowerCheck.contains('vkvideo.ru') ||
+        lowerCheck.contains('vk.ru/video') ||
+        lowerCheck.contains('vk.com/video_ext.php') ||
+        lowerCheck.contains('ok.ru/video')) {
       final serverBase = widget.serverUrl.replaceAll('wss://', 'https://').replaceAll('ws://', 'http://');
       final proxyUrl = '$serverBase/extract?url=${Uri.encodeComponent(finalUrl)}';
       try {

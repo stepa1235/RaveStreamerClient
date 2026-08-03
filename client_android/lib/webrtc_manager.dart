@@ -183,7 +183,6 @@ class WebRTCManager {
         }
         if (Platform.isAndroid || Platform.isIOS) {
           try {
-            Helper.setSpeakerphoneOn(true);
             MethodChannel('com.example.client/permissions').invokeMethod('setMediaAudioMode');
           } catch (_) {}
         }
