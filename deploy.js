@@ -4,7 +4,7 @@ const path = require('path');
 
 const token = process.env.GITHUB_TOKEN || process.env.TOKEN || '';
 const repo = 'stepa1235/RaveStreamerClient';
-const releaseTag = 'v1.3.2';
+const releaseTag = 'v1.3.3';
 
 const headers = {
   'Authorization': `Bearer ${token}`,
@@ -82,7 +82,7 @@ async function deploy() {
     }, JSON.stringify({
       tag_name: releaseTag,
       name: `RaveStreamer ${releaseTag}`,
-      body: 'v1.3.2 Release: Fixed tab streaming echo, prevented host self-playback, muted background HTTP stream player during WebRTC streaming to eliminate double audio, updated getDisplayMedia audio constraints, and reduced server stream fallback latency.'
+      body: 'v1.3.3 Release: Restored PC viewer audio (HTTP stream via _mkPlayer), reduced stream latency from ~10s to ~100ms (MediaRecorder interval 250ms→100ms, server buffer reduced to 1s), host echo prevention retained.'
     }));
   }
 
