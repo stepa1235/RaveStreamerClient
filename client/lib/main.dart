@@ -2638,9 +2638,10 @@ class _RoomPageState extends State<RoomPage> {
             options = { mimeType: 'video/webm' };
           }
           mediaRecorder = new MediaRecorder(localStream, options);
-          mediaRecorder.ondataavailable = (e) => {
+          mediaRecorder.ondataavailable = async (e) => {
             if (e.data && e.data.size > 0) {
-              socket.emit('live-stream-chunk', { roomId, chunk: e.data });
+              const buffer = await e.data.arrayBuffer();
+              socket.emit('live-stream-chunk', { roomId, chunk: buffer });
             }
           };
           mediaRecorder.start(250);

@@ -4836,6 +4836,7 @@ class WebviewPlayer {
               final userAgent = request.headers.value('user-agent') ?? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
               targetRequest.headers.set('User-Agent', userAgent);
               targetRequest.headers.set('Accept', '*/*');
+              targetRequest.headers.set('bypass-tunnel-reminder', 'true');
               
               if (cookiesParam != null && cookiesParam.isNotEmpty) {
                 targetRequest.headers.set('Cookie', cookiesParam);
@@ -5002,6 +5003,8 @@ class WebviewPlayer {
       final isHttp = playUrl.startsWith('http') || playUrl.startsWith('https');
       if (!isHttp) {
         playUrl = 'http://127.0.0.1:$_localPort/file?path=${Uri.encodeComponent(playUrl)}';
+      } else if (playUrl.contains('/live-stream/') || playUrl.contains('/proxy/')) {
+        playUrl = 'http://127.0.0.1:$_localPort/proxy?url=${Uri.encodeComponent(playUrl)}';
       }
 
       final cmd = {'action': 'load', 'url': playUrl, 'headers': headers, 'play': play};
