@@ -5384,9 +5384,15 @@ const String _htmlPlayerCode = r'''
       }
     });
 
+    var webrtcIceQueue = [];
+    var webrtcHasRemoteDesc = false;
+
     function handleWebRTCOffer(senderId, offer) {
       console.log('WebRTC offer received from host ' + senderId);
       if (window.webrtcPC) { try { window.webrtcPC.close(); } catch(_) {} }
+      webrtcIceQueue = [];
+      webrtcHasRemoteDesc = false;
+
       window.webrtcPC = new RTCPeerConnection({
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
@@ -5412,7 +5418,14 @@ const String _htmlPlayerCode = r'''
       };
 
       window.webrtcPC.setRemoteDescription(new RTCSessionDescription(offer))
-        .then(function() { return window.webrtcPC.createAnswer(); })
+        .then(function() {
+          webrtcHasRemoteDesc = true;
+          while (webrtcIceQueue.length > 0) {
+            var cand = webrtcIceQueue.shift();
+            window.webrtcPC.addIceCandidate(new RTCIceCandidate(cand)).catch(function(e){ console.error('Queued ICE error:', e); });
+          }
+          return window.webrtcPC.createAnswer();
+        })
         .then(function(answer) { return window.webrtcPC.setLocalDescription(answer); })
         .then(function() {
           postMessageToFlutter({
@@ -5427,10 +5440,13 @@ const String _htmlPlayerCode = r'''
     }
 
     function handleWebRTCIce(senderId, candidate) {
-      if (window.webrtcPC && candidate) {
+      if (!candidate) return;
+      if (window.webrtcPC && webrtcHasRemoteDesc) {
         window.webrtcPC.addIceCandidate(new RTCIceCandidate(candidate)).catch(function(e) {
           console.error('ICE candidate error: ' + e.message);
         });
+      } else {
+        webrtcIceQueue.push(candidate);
       }
     }
     
