@@ -163,7 +163,7 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
-String globalAppVersion = "1.1.55";
+String globalAppVersion = "1.1.56";
 
 bool isNewerVersion(String latest, String current) {
   try {
@@ -2437,7 +2437,10 @@ class _RoomPageState extends State<RoomPage> {
   }
 
   void _clearPlayer() {
-    _socket.emit('change-video', {
+    _socket.emit('clear-player', {
+      'roomId': widget.roomId
+    });
+    _socket.emit('video-change', {
       'roomId': widget.roomId,
       'videoUrl': '',
       'videoName': 'No Video Loaded'
