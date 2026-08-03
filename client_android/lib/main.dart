@@ -2074,6 +2074,7 @@ class _RoomPageState extends State<RoomPage> {
           final serverBase = widget.serverUrl.replaceAll('wss://', 'https://').replaceAll('ws://', 'http://');
           final streamUrl = '$serverBase/live-stream/${widget.roomId}';
           _setupVideoPlayer(streamUrl, 'Live Stream', startPlaying: true);
+          _socket.emit('new-viewer', {'roomId': widget.roomId, 'viewerId': _socket.id});
         }
       } else if (videoUrl.isNotEmpty) {
         _setupVideoPlayer(videoUrl, videoName, startPlaying: isPlaying, startSeconds: calculatedTime, headers: headers);
@@ -2100,23 +2101,19 @@ class _RoomPageState extends State<RoomPage> {
 
     _socket.on('webrtc-offer', (data) {
       if (_isDisposed || !mounted) return;
-      if (data['targetId'] == _socket.id) {
-        final senderId = data['senderId'] as String?;
-        final offer = data['offer'];
-        if (senderId != null && offer != null) {
-          _mkPlayer?.openWebRTC(senderId, offer);
-        }
+      final senderId = data['senderId'] as String?;
+      final offer = data['offer'];
+      if (senderId != null && offer != null) {
+        _mkPlayer?.openWebRTC(senderId, offer);
       }
     });
 
     _socket.on('webrtc-ice-candidate', (data) {
       if (_isDisposed || !mounted) return;
-      if (data['targetId'] == _socket.id) {
-        final senderId = data['senderId'] as String?;
-        final candidate = data['candidate'];
-        if (senderId != null && candidate != null) {
-          _mkPlayer?.addIceCandidate(senderId, candidate);
-        }
+      final senderId = data['senderId'] as String?;
+      final candidate = data['candidate'];
+      if (senderId != null && candidate != null) {
+        _mkPlayer?.addIceCandidate(senderId, candidate);
       }
     });
 
