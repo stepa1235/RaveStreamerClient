@@ -3303,28 +3303,31 @@ class _RoomPageState extends State<RoomPage> {
                 children: [
                   // Progress Slider / LIVE badge
                   _isLiveStreaming
-                      ? Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                          decoration: BoxDecoration(
-                            color: Colors.red.withOpacity(0.2),
-                            borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: Colors.redAccent, width: 1),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: const [
-                              Icon(Icons.circle, color: Colors.redAccent, size: 10),
-                              SizedBox(width: 6),
-                              Text(
-                                'ПРЯМОЙ ЭФИР',
-                                style: TextStyle(
-                                  color: Colors.redAccent,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.bold,
-                                  letterSpacing: 1.0,
+                      ? Align(
+                          alignment: Alignment.centerLeft,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: Colors.red.withOpacity(0.2),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.redAccent, width: 1),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: const [
+                                Icon(Icons.circle, color: Colors.redAccent, size: 6),
+                                SizedBox(width: 4),
+                                Text(
+                                  'ПРЯМОЙ ЭФИР',
+                                  style: TextStyle(
+                                    color: Colors.redAccent,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                    letterSpacing: 0.5,
+                                  ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
                         )
                       : Row(
