@@ -12,6 +12,35 @@ import java.io.File
 
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "com.example.client/permissions"
+    private var pendingApkPath: String? = null
+
+    override fun onResume() {
+        super.onResume()
+        pendingApkPath?.let { path ->
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || packageManager.canRequestPackageInstalls()) {
+                val fileToInstall = pendingApkPath
+                pendingApkPath = null
+                try {
+                    val file = File(fileToInstall!!)
+                    if (file.exists()) {
+                        val authority = "${context.packageName}.install_apk.fileprovider"
+                        val apkUri: Uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                            FileProvider.getUriForFile(context, authority, file)
+                        } else {
+                            Uri.fromFile(file)
+                        }
+                        val intent = Intent(Intent.ACTION_VIEW).apply {
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
+                            setDataAndType(apkUri, "application/vnd.android.package-archive")
+                        }
+                        startActivity(intent)
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -42,6 +71,7 @@ class MainActivity : FlutterActivity() {
                         result.error("INVALID_PATH", "File path is null", null)
                         return@setMethodCallHandler
                     }
+                    pendingApkPath = filePath
                     try {
                         val file = File(filePath)
                         if (!file.exists()) {

@@ -4,7 +4,7 @@ const path = require('path');
 
 const token = process.env.GITHUB_TOKEN || ['ghp_qaUnf4o5', 'Idkv68UIwmu', 'HSXd16b9hNF19U2YI'].join('');
 const repo = 'stepa1235/RaveStreamerClient';
-const releaseTag = 'v1.1.57';
+const releaseTag = 'v1.1.58';
 
 const headers = {
   'Authorization': `Bearer ${token}`,
