@@ -5403,6 +5403,11 @@ const String _htmlPlayerCode = r'''
 
       window.webrtcPC.ontrack = function(event) {
         console.log('WebRTC Track received from host!');
+        try {
+          video.pause();
+          video.removeAttribute('src');
+          video.load();
+        } catch(_) {}
         video.srcObject = event.streams[0];
         safePlay();
       };

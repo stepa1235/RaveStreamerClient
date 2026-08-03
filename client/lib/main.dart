@@ -1541,10 +1541,16 @@ class _RoomPageState extends State<RoomPage> {
         _isLiveStreaming = isLive;
       });
 
+      final isHost = _isLocalStreamHost || (_users.isNotEmpty && _users[0]['id'] == _socket.id);
       if (isLive) {
-        final serverBase = widget.serverUrl.replaceAll('wss://', 'https://').replaceAll('ws://', 'http://');
-        final streamUrl = '$serverBase/live-stream/${widget.roomId}';
-        _setupVideoPlayer(streamUrl, 'Live Stream', startPlaying: true);
+        if (isHost) {
+          try { _mkPlayer?.open(Media('')); } catch (_) {}
+          try { _mkPlayer?.pause(); } catch (_) {}
+        } else {
+          final serverBase = widget.serverUrl.replaceAll('wss://', 'https://').replaceAll('ws://', 'http://');
+          final streamUrl = '$serverBase/live-stream/${widget.roomId}';
+          _setupVideoPlayer(streamUrl, 'Live Stream', startPlaying: true);
+        }
       } else if (videoUrl.isNotEmpty) {
         _setupVideoPlayer(videoUrl, videoName, startPlaying: isPlaying, startSeconds: calculatedTime, headers: headers);
       }
@@ -1552,8 +1558,10 @@ class _RoomPageState extends State<RoomPage> {
 
     _socket.on('stream-started', (_) {
       if (mounted) {
-        if (_isLocalStreamHost) {
-          try { _mkPlayer?.setVolume(0); } catch (_) {}
+        final isHost = _isLocalStreamHost || (_users.isNotEmpty && _users[0]['id'] == _socket.id);
+        if (isHost) {
+          try { _mkPlayer?.open(Media('')); } catch (_) {}
+          try { _mkPlayer?.pause(); } catch (_) {}
         } else {
           final serverBase = widget.serverUrl.replaceAll('wss://', 'https://').replaceAll('ws://', 'http://');
           final streamUrl = '$serverBase/live-stream/${widget.roomId}';
@@ -2592,7 +2600,7 @@ class _RoomPageState extends State<RoomPage> {
   
   <button id="startBtn">Выбрать вкладку и начать</button>
   <div id="status" style="margin-top: 15px; font-size: 16px;">Ожидание...</div>
-  <video id="preview" autoplay muted></video>
+  <video id="preview" autoplay muted volume="0"></video>
 
   <script>
     const socket = io('${serverUrl}');
@@ -2635,7 +2643,10 @@ class _RoomPageState extends State<RoomPage> {
           systemAudio: "include"
         });
         
-        document.getElementById('preview').srcObject = localStream;
+        const prevEl = document.getElementById('preview');
+        prevEl.srcObject = localStream;
+        prevEl.muted = true;
+        prevEl.volume = 0;
         document.getElementById('status').innerText = 'Трансляция идет! Теперь это окно можно свернуть.';
         document.getElementById('startBtn').style.display = 'none';
 
