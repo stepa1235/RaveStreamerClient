@@ -164,7 +164,7 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
-String globalAppVersion = "1.1.53";
+String globalAppVersion = "1.1.54";
 
 bool isNewerVersion(String latest, String current) {
   try {
@@ -1551,9 +1551,21 @@ class _RoomPageState extends State<RoomPage> {
     // Handle video change event
     _socket.on('video-changed', (data) {
       if (_isDisposed || !mounted) return;
-      final videoUrl = data['videoUrl'] as String;
-      final videoName = data['videoName'] as String;
+      final videoUrl = data['videoUrl'] as String? ?? '';
+      final videoName = data['videoName'] as String? ?? 'No Video Loaded';
       final headers = data['headers'] as Map<String, dynamic>?;
+      
+      if (videoUrl.isEmpty) {
+        try { _mkPlayer?.open(Media('')); } catch (_) {}
+        try { _mkPlayer?.pause(); } catch (_) {}
+        try { if (_webrtcManager != null) _webrtcManager!.remoteRenderer.srcObject = null; } catch (_) {}
+        setState(() {
+          _currentVideoUrl = '';
+          _currentVideoName = 'No Video Loaded';
+          _isLiveStreaming = false;
+        });
+        return;
+      }
       
       _setupVideoPlayer(videoUrl, videoName, startPlaying: true, headers: headers);
     });
@@ -2030,11 +2042,14 @@ class _RoomPageState extends State<RoomPage> {
     _socket.emit('stop-stream', {
       'roomId': widget.roomId
     });
+    _urlInputController.clear();
+    try { _mkPlayer?.open(Media('')); } catch (_) {}
+    try { _mkPlayer?.pause(); } catch (_) {}
+    try { if (_webrtcManager != null) _webrtcManager!.remoteRenderer.srcObject = null; } catch (_) {}
     setState(() {
       _currentVideoUrl = '';
       _currentVideoName = 'No Video Loaded';
       _isLiveStreaming = false;
-      _mkPlayer?.pause();
     });
   }
 
