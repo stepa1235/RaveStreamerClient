@@ -164,7 +164,7 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
-String globalAppVersion = "1.1.58";
+String globalAppVersion = "1.2.0";
 
 bool isNewerVersion(String latest, String current) {
   try {
@@ -1545,6 +1545,28 @@ class _RoomPageState extends State<RoomPage> {
 
       if (videoUrl.isNotEmpty) {
         _setupVideoPlayer(videoUrl, videoName, startPlaying: isPlaying, startSeconds: calculatedTime, headers: headers);
+      }
+    });
+
+    _socket.on('stream-started', (_) {
+      if (mounted) {
+        final serverBase = widget.serverUrl.replaceAll('wss://', 'https://').replaceAll('ws://', 'http://');
+        final streamUrl = '$serverBase/live-stream/${widget.roomId}';
+        setState(() {
+          _isLiveStreaming = true;
+        });
+        _setupVideoPlayer(streamUrl, 'Live Stream', startPlaying: true);
+        _triggerControlsVisibility();
+      }
+    });
+
+    _socket.on('stream-stopped', (_) {
+      if (mounted) {
+        setState(() {
+          _isLiveStreaming = false;
+        });
+        try { _mkPlayer?.open(Media('')); } catch (_) {}
+        try { _mkPlayer?.pause(); } catch (_) {}
       }
     });
 
