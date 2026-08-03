@@ -4,7 +4,7 @@ const path = require('path');
 
 const token = process.env.GITHUB_TOKEN || ['ghp_qaUnf4o5', 'Idkv68UIwmu', 'HSXd16b9hNF19U2YI'].join('');
 const repo = 'stepa1235/RaveStreamerClient';
-const releaseTag = 'v1.2.3';
+const releaseTag = 'v1.2.4';
 
 const headers = {
   'Authorization': `Bearer ${token}`,
@@ -82,7 +82,7 @@ async function deploy() {
     }, JSON.stringify({
       tag_name: releaseTag,
       name: `RaveStreamer ${releaseTag}`,
-      body: 'v1.2.3 Release: Fixed VK video links format selection (audio+video), mobile live stream playback auto-start & mixed content, 120s host disconnect room grace period state persistence, and completely removed bottom toast error popups.'
+      body: 'v1.2.4 Release: Fixed mobile top AppBar hiding during playback, restored audio playback on phone in WebView, implemented complete player clearing & unloading, and enabled Desktop MediaRecorder screen stream relay to mobile.'
     }));
   }
 

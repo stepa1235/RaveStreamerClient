@@ -2068,6 +2068,9 @@ class _RoomPageState extends State<RoomPage> {
           _currentVideoUrl = '';
           _currentVideoName = 'No Video Loaded';
           _isLiveStreaming = false;
+          _isPlayerVisible = false;
+          _translators = [];
+          _currentPageUrl = '';
         });
         return;
       }
@@ -2390,6 +2393,9 @@ class _RoomPageState extends State<RoomPage> {
       _currentVideoUrl = '';
       _currentVideoName = 'No Video Loaded';
       _isLiveStreaming = false;
+      _isPlayerVisible = false;
+      _translators = [];
+      _currentPageUrl = '';
     });
   }
 
@@ -2971,8 +2977,7 @@ class _RoomPageState extends State<RoomPage> {
     final isDesktop = screenWidth > 800;
 
     return Scaffold(
-      appBar: _showControls || !(_mkPlayer?.state.playing ?? false)
-          ? AppBar(
+      appBar: AppBar(
         title: Row(
           children: [
             Container(
@@ -3020,8 +3025,7 @@ class _RoomPageState extends State<RoomPage> {
             tooltip: _loc('activeUsers'),
           ),
         ],
-      )
-          : PreferredSize(preferredSize: Size.zero, child: const SizedBox.shrink()),
+      ),
       body: GestureDetector(
         onTap: _triggerControlsVisibility,
         behavior: HitTestBehavior.opaque,
@@ -5098,13 +5102,25 @@ const String _htmlPlayerCode = r'''
 
     const video = document.getElementById('player');
 
+    const unmute = function() {
+      if (video.muted) {
+        video.muted = false;
+        console.log('Unmuted video on user interaction');
+      }
+    };
+    document.addEventListener('click', unmute);
+    document.addEventListener('touchstart', unmute);
+
     function safePlay() {
+      video.muted = false;
       var promise = video.play();
       if (promise !== undefined) {
         promise.catch(function(error) {
-          console.log('Autoplay error: ' + error.message + '. Muting and retrying...');
+          console.log('Autoplay error: ' + error.message + '. Retrying muted first...');
           video.muted = true;
-          video.play().catch(function(err2) {
+          video.play().then(function() {
+            setTimeout(function() { video.muted = false; }, 300);
+          }).catch(function(err2) {
             console.error('Final play failure: ' + err2.message);
           });
         });
@@ -5121,7 +5137,7 @@ const String _htmlPlayerCode = r'''
       });
     }
 
-    video.addEventListener('play', sendState);
+    video.addEventListener('play', function() { video.muted = false; sendState(); });
     video.addEventListener('pause', sendState);
     video.addEventListener('timeupdate', sendState);
     video.addEventListener('durationchange', sendState);
@@ -5138,6 +5154,8 @@ const String _htmlPlayerCode = r'''
         let cmd = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
         if (cmd.action === 'load') {
           video.pause();
+          video.muted = false;
+          video.volume = 1.0;
           if (window.hls) { hls.destroy(); hls = null; }
           const urlLower = cmd.url.toLowerCase();
           const isM3U8 = urlLower.includes('.m3u8') || urlLower.includes('%2em3u8');
@@ -5194,13 +5212,20 @@ const String _htmlPlayerCode = r'''
             if (cmd.play) safePlay();
           }
         } else if (cmd.action === 'play') {
+          video.muted = false;
           safePlay();
         } else if (cmd.action === 'pause') {
           video.pause();
+        } else if (cmd.action === 'stop' || cmd.action === 'clear') {
+          video.pause();
+          video.removeAttribute('src');
+          video.load();
+          if (window.hls) { hls.destroy(); hls = null; }
         } else if (cmd.action === 'seek') {
           video.currentTime = cmd.time;
         } else if (cmd.action === 'volume') {
-          video.volume = cmd.volume / 100;
+          video.volume = Math.max(0, Math.min(1, cmd.volume / 100));
+          if (cmd.volume > 0) video.muted = false;
         }
       } catch (err) {
         postMessageToFlutter({

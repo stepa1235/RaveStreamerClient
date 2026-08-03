@@ -1587,6 +1587,9 @@ class _RoomPageState extends State<RoomPage> {
           _currentVideoUrl = '';
           _currentVideoName = 'No Video Loaded';
           _isLiveStreaming = false;
+          _isPlayerVisible = false;
+          _translators = [];
+          _currentPageUrl = '';
         });
         return;
       }
@@ -2045,6 +2048,9 @@ class _RoomPageState extends State<RoomPage> {
       _currentVideoUrl = '';
       _currentVideoName = 'No Video Loaded';
       _isLiveStreaming = false;
+      _isPlayerVisible = false;
+      _translators = [];
+      _currentPageUrl = '';
     });
   }
 
@@ -2624,7 +2630,28 @@ class _RoomPageState extends State<RoomPage> {
         document.getElementById('status').innerText = 'Трансляция идет! Теперь это окно можно свернуть.';
         document.getElementById('startBtn').style.display = 'none';
 
+        // Start MediaRecorder for HTTP live stream relay (Android viewers)
+        let mediaRecorder;
+        try {
+          let options = { mimeType: 'video/webm;codecs=vp8,opus', videoBitsPerSecond: 2500000 };
+          if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+            options = { mimeType: 'video/webm' };
+          }
+          mediaRecorder = new MediaRecorder(localStream, options);
+          mediaRecorder.ondataavailable = (e) => {
+            if (e.data && e.data.size > 0) {
+              socket.emit('live-stream-chunk', { roomId, chunk: e.data });
+            }
+          };
+          mediaRecorder.start(250);
+        } catch (mErr) {
+          console.log('MediaRecorder error:', mErr);
+        }
+
         localStream.getVideoTracks()[0].onended = () => {
+          if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+            try { mediaRecorder.stop(); } catch(_) {}
+          }
           socket.emit('stop-stream', { roomId });
           document.getElementById('status').innerText = 'Трансляция завершена.';
         };
