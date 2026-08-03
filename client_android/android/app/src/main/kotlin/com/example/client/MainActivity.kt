@@ -75,6 +75,21 @@ class MainActivity : FlutterActivity() {
                         val audioManager = getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
                         audioManager.mode = android.media.AudioManager.MODE_NORMAL
                         audioManager.isSpeakerphoneOn = true
+                        
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                            val focusRequest = android.media.AudioFocusRequest.Builder(android.media.AudioManager.AUDIOFOCUS_GAIN)
+                                .setAudioAttributes(
+                                    android.media.AudioAttributes.Builder()
+                                        .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MOVIE)
+                                        .build()
+                                )
+                                .build()
+                            audioManager.requestAudioFocus(focusRequest)
+                        } else {
+                            @Suppress("DEPRECATION")
+                            audioManager.requestAudioFocus(null, android.media.AudioManager.STREAM_MUSIC, android.media.AudioManager.AUDIOFOCUS_GAIN)
+                        }
                         result.success(true)
                     } catch (e: Exception) {
                         result.error("AUDIO_ERROR", e.message, null)
