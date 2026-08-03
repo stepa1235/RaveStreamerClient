@@ -18,8 +18,6 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:apk_sideload/install_apk.dart';
-import 'package:flutter_webrtc/flutter_webrtc.dart' hide Webview;
-import 'webrtc_manager.dart';
 
 const Map<String, Map<String, String>> _localizedValues = {
   'en': {
@@ -163,7 +161,7 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
-String globalAppVersion = "1.2.0";
+String globalAppVersion = "1.2.1";
 
 bool isNewerVersion(String latest, String current) {
   try {
@@ -270,13 +268,9 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
   @override
   void initState() {
     super.initState();
-    Helper.setAndroidAudioConfiguration(AndroidAudioConfiguration(
-      manageAudioFocus: true,
-      androidAudioMode: AndroidAudioMode.normal,
-      androidAudioStreamType: AndroidAudioStreamType.music,
-      androidAudioAttributesUsageType: AndroidAudioAttributesUsageType.media,
-      androidAudioAttributesContentType: AndroidAudioAttributesContentType.movie,
-    ));
+    try {
+      const MethodChannel('com.example.client/permissions').invokeMethod('setMediaAudioMode');
+    } catch (_) {}
     _loadAllSettings();
   }
 
@@ -1719,8 +1713,6 @@ class _RoomPageState extends State<RoomPage> {
   WebviewPlayer? _mkPlayer;
   bool _playerReady = false; // becomes true once player is initialized
 
-  // WebRTC
-  WebRTCManager? _webrtcManager;
   bool _isLiveStreaming = false;
 
   // App states
@@ -1896,18 +1888,7 @@ class _RoomPageState extends State<RoomPage> {
       .build()
     );
 
-    _webrtcManager = WebRTCManager(
-      socket: _socket,
-      roomId: widget.roomId,
-      isHostResolver: () => false, // Android can't host streams yet
-    );
-    _webrtcManager!.onStreamStarted = () {
-      if (mounted) setState(() { _isLiveStreaming = true; });
-    };
-    _webrtcManager!.onStreamStopped = () {
-      if (mounted) setState(() { _isLiveStreaming = false; });
-    };
-    _webrtcManager!.initialize();
+
 
     _socket.connect();
 
@@ -2107,7 +2088,6 @@ class _RoomPageState extends State<RoomPage> {
       if (videoUrl.isEmpty) {
         try { _mkPlayer?.open(Media('')); } catch (_) {}
         try { _mkPlayer?.pause(); } catch (_) {}
-        try { if (_webrtcManager != null) _webrtcManager!.remoteRenderer.srcObject = null; } catch (_) {}
         setState(() {
           _currentVideoUrl = '';
           _currentVideoName = 'No Video Loaded';
@@ -2462,7 +2442,6 @@ class _RoomPageState extends State<RoomPage> {
     _urlInputController.clear();
     try { _mkPlayer?.open(Media('')); } catch (_) {}
     try { _mkPlayer?.pause(); } catch (_) {}
-    try { if (_webrtcManager != null) _webrtcManager!.remoteRenderer.srcObject = null; } catch (_) {}
     setState(() {
       _currentVideoUrl = '';
       _currentVideoName = 'No Video Loaded';
@@ -3216,12 +3195,7 @@ class _RoomPageState extends State<RoomPage> {
                     child: Stack(
                       fit: StackFit.expand,
                       children: [
-                        if (_isLiveStreaming && _webrtcManager != null)
-                          RTCVideoView(
-                            _webrtcManager!.remoteRenderer,
-                            objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
-                          )
-                        else if (_playerReady && _mkPlayer != null && _mkPlayer!.isInitialized)
+                        if (_playerReady && _mkPlayer != null && _mkPlayer!.isInitialized)
                           WebViewWidget(controller: _mkPlayer!.controller)
                         else
                           const Center(
