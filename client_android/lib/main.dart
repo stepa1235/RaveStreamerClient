@@ -375,11 +375,7 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
       debugPrint('Could not fetch version from Gist: $e');
     }
     if (verbose && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(_locale == 'ru' ? 'Не удалось проверить обновления' : 'Could not check for updates'),
-        ),
-      );
+      /* SnackBar disabled */
     }
   }
 
@@ -404,16 +400,7 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
         }
       });
     } else if (verbose && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            _locale == 'ru'
-                ? 'У вас установлена последняя версия v$globalAppVersion! ✨'
-                : 'You are using the latest version v$globalAppVersion! ✨',
-          ),
-          backgroundColor: Colors.green,
-        ),
-      );
+      /* SnackBar disabled */
     }
   }
 
@@ -625,7 +612,7 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
       debugPrint('Auto-download error: $e');
       if (mounted) Navigator.of(context).pop();
       if (mounted) {
-         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Download failed: $e. Opening browser...')));
+         /* SnackBar disabled */
       }
       try {
         await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
@@ -1094,11 +1081,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
     }
 
     if (verbose && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(widget.locale == 'ru' ? 'Не удалось проверить обновления' : 'Could not check for updates'),
-        ),
-      );
+      /* SnackBar disabled */
     }
   }
 
@@ -1141,16 +1124,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
         }
       });
     } else if (verbose && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            widget.locale == 'ru'
-                ? 'У вас установлена последняя версия v$globalAppVersion! ✨'
-                : 'You are using the latest version v$globalAppVersion! ✨',
-          ),
-          backgroundColor: Colors.green,
-        ),
-      );
+      /* SnackBar disabled */
     }
   }
 
@@ -1354,7 +1328,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
       debugPrint('Auto-download error: $e');
       if (mounted) Navigator.of(context).pop();
       if (mounted) {
-         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Download failed: $e. Opening browser...')));
+         /* SnackBar disabled */
       }
       try {
         await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
@@ -1775,9 +1749,7 @@ class _RoomPageState extends State<RoomPage> {
     player.stream.error.listen((err) {
       debugPrint('[webview] ERROR: $err');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Player error: $err'), backgroundColor: Colors.red, duration: const Duration(seconds: 5)),
-        );
+        /* SnackBar disabled */
       }
     });
     player.stream.playing.listen((_) { if (mounted) setState(() {}); });
@@ -2051,7 +2023,11 @@ class _RoomPageState extends State<RoomPage> {
         _isLiveStreaming = isLive;
       });
 
-      if (videoUrl.isNotEmpty) {
+      if (isLive) {
+        final serverBase = widget.serverUrl.replaceAll('wss://', 'https://').replaceAll('ws://', 'http://');
+        final streamUrl = '$serverBase/live-stream/${widget.roomId}';
+        _setupVideoPlayer(streamUrl, 'Live Stream', startPlaying: true);
+      } else if (videoUrl.isNotEmpty) {
         _setupVideoPlayer(videoUrl, videoName, startPlaying: isPlaying, startSeconds: calculatedTime, headers: headers);
       }
     });
@@ -2189,12 +2165,7 @@ class _RoomPageState extends State<RoomPage> {
     _socket.on('kicked', (_) {
       if (_isDisposed || !mounted) return;
       _socket.disconnect();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(_loc('kicked')),
-          backgroundColor: Colors.red,
-        ),
-      );
+      /* SnackBar disabled */
       Navigator.of(context).popUntil((route) => route.isFirst);
     });
 
@@ -2202,12 +2173,7 @@ class _RoomPageState extends State<RoomPage> {
     _socket.on('kicked-and-banned', (_) {
       if (_isDisposed || !mounted) return;
       _socket.disconnect();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(_loc('banned')),
-          backgroundColor: Colors.red,
-        ),
-      );
+      /* SnackBar disabled */
       Navigator.of(context).popUntil((route) => route.isFirst);
     });
 
@@ -2216,12 +2182,7 @@ class _RoomPageState extends State<RoomPage> {
       if (_isDisposed || !mounted) return;
       final errorMsg = data as String;
       _socket.disconnect();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(errorMsg),
-          backgroundColor: Colors.red,
-        ),
-      );
+      /* SnackBar disabled */
       Navigator.of(context).pop(); // Go back to connection page
     });
   }
@@ -2280,24 +2241,14 @@ class _RoomPageState extends State<RoomPage> {
 
     if (isYouTube) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(_locale == 'ru' ? 'Извлечение качества $_preferredQuality...' : 'Extracting $_preferredQuality...'),
-            duration: const Duration(seconds: 2),
-          ),
-        );
+        /* SnackBar disabled */
       }
       final streamUrl = await getYoutubeStreamUrl(url);
       if (streamUrl != null) {
         playUrl = streamUrl;
       } else {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(_locale == 'ru' ? 'Локальное извлечение не удалось...' : 'Local extraction failed...'),
-              duration: const Duration(seconds: 2),
-            ),
-          );
+          /* SnackBar disabled */
         }
       }
     } else if (lowercaseUrl.startsWith('http') &&
@@ -2313,12 +2264,7 @@ class _RoomPageState extends State<RoomPage> {
                !lowercaseUrl.contains('vk-cdn')) {
       // Non-YouTube web link: extract via server
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(_locale == 'ru' ? 'Извлечение видеопотока...' : 'Extracting video stream...'),
-            duration: const Duration(seconds: 5),
-          ),
-        );
+        /* SnackBar disabled */
       }
       try {
         final extractUri = Uri.parse('${widget.serverUrl}/extract?url=${Uri.encodeComponent(url)}');
@@ -2359,9 +2305,7 @@ class _RoomPageState extends State<RoomPage> {
       } catch (e) {
         debugPrint('Extraction failed: $e');
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Extraction failed: $e'), backgroundColor: Colors.red),
-          );
+          /* SnackBar disabled */
         }
         return;
       }
@@ -2403,9 +2347,7 @@ class _RoomPageState extends State<RoomPage> {
     } catch (e) {
       if (!mounted) return;
       debugPrint('Error opening media: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to load video: $e'), backgroundColor: Colors.red),
-      );
+      /* SnackBar disabled */
     }
   }
 
@@ -2503,14 +2445,7 @@ class _RoomPageState extends State<RoomPage> {
         finalName = name.trim().isEmpty ? 'YouTube Video' : name.trim();
       } else {
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(_locale == 'ru' 
-              ? 'Извлечение видеопотока с сервера...' 
-              : 'Extracting video stream from server...'),
-            duration: const Duration(seconds: 5),
-          ),
-        );
+        /* SnackBar disabled */
         
         try {
           final extractUri = Uri.parse('${widget.serverUrl}/extract?url=${Uri.encodeComponent(url)}');
@@ -2547,14 +2482,7 @@ class _RoomPageState extends State<RoomPage> {
         } catch (e) {
           debugPrint('Server-side extraction failed: $e');
           if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(_locale == 'ru' 
-                ? 'Не удалось извлечь видеопоток: $e' 
-                : 'Failed to extract stream: $e'),
-              backgroundColor: Colors.red,
-            ),
-          );
+          /* SnackBar disabled */
           return;
         }
       }
@@ -2614,12 +2542,7 @@ class _RoomPageState extends State<RoomPage> {
         finalName = name.trim().isEmpty ? 'YouTube Video' : name.trim();
       } else {
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(_locale == 'ru' ? 'Извлечение видеопотока для очереди...' : 'Extracting video stream for queue...'),
-            duration: const Duration(seconds: 4),
-          ),
-        );
+        /* SnackBar disabled */
         
         try {
           final extractUri = Uri.parse('${widget.serverUrl}/extract?url=${Uri.encodeComponent(url)}');
@@ -2654,12 +2577,7 @@ class _RoomPageState extends State<RoomPage> {
         } catch (e) {
           debugPrint('Extraction failed for queue: $e');
           if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(_locale == 'ru' ? 'Ошибка извлечения: $e' : 'Extraction error: $e'),
-              backgroundColor: Colors.red,
-            ),
-          );
+          /* SnackBar disabled */
           return;
         }
       }
@@ -2673,12 +2591,7 @@ class _RoomPageState extends State<RoomPage> {
     });
 
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(_locale == 'ru' ? 'Видео добавлено в очередь!' : 'Video added to queue!'),
-        backgroundColor: Colors.green,
-      ),
-    );
+    /* SnackBar disabled */
   }
 
   void _removeFromQueue(int index) {
@@ -2691,12 +2604,7 @@ class _RoomPageState extends State<RoomPage> {
   Future<void> _switchDubbing(int translatorIndex) async {
     if (_currentPageUrl.isEmpty) return;
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(_locale == 'ru' ? 'Переключение озвучки...' : 'Switching dubbing...'),
-          duration: const Duration(seconds: 3),
-        ),
-      );
+      /* SnackBar disabled */
     }
     try {
       final uri = Uri.parse(
@@ -2726,12 +2634,7 @@ class _RoomPageState extends State<RoomPage> {
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(_locale == 'ru' ? 'Ошибка переключения: $e' : 'Switch error: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      /* SnackBar disabled */
     }
   }
 
@@ -2855,9 +2758,7 @@ class _RoomPageState extends State<RoomPage> {
     final file = File(filePath);
     if (!await file.exists()) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Selected file does not exist.'), backgroundColor: Colors.red),
-      );
+      /* SnackBar disabled */
       return;
     }
 
@@ -2997,12 +2898,7 @@ class _RoomPageState extends State<RoomPage> {
           _changeVideo(streamUrl, fileName);
           
           if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(_locale == 'ru' ? 'Видео успешно загружено!' : 'Video uploaded successfully!'),
-              backgroundColor: Colors.green,
-            ),
-          );
+          /* SnackBar disabled */
         } else {
           throw Exception(data['error'] ?? 'Unknown upload error');
         }
@@ -3020,9 +2916,7 @@ class _RoomPageState extends State<RoomPage> {
         _isUploading = false;
       });
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Upload failed: $e'), backgroundColor: Colors.red),
-        );
+        /* SnackBar disabled */
       }
     }
   }
@@ -3044,9 +2938,7 @@ class _RoomPageState extends State<RoomPage> {
     } catch (e) {
       if (!mounted) return;
       debugPrint('Error picking file: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('File picker error: $e'), backgroundColor: Colors.red),
-      );
+      /* SnackBar disabled */
     }
   }
 
@@ -4299,11 +4191,7 @@ class _RoomPageState extends State<RoomPage> {
       debugPrint('Could not fetch version from Gist: $e');
     }
     if (verbose && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(_locale == 'ru' ? 'Не удалось проверить обновления' : 'Could not check for updates'),
-        ),
-      );
+      /* SnackBar disabled */
     }
   }
 
@@ -4346,16 +4234,7 @@ class _RoomPageState extends State<RoomPage> {
         }
       });
     } else if (verbose && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            _locale == 'ru'
-                ? 'У вас установлена последняя версия v$globalAppVersion! ✨'
-                : 'You are using the latest version v$globalAppVersion! ✨',
-          ),
-          backgroundColor: Colors.green,
-        ),
-      );
+      /* SnackBar disabled */
     }
   }
 
@@ -4559,7 +4438,7 @@ class _RoomPageState extends State<RoomPage> {
       debugPrint('Auto-download error: $e');
       if (mounted) Navigator.of(context).pop();
       if (mounted) {
-         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Download failed: $e. Opening browser...')));
+         /* SnackBar disabled */
       }
       try {
         await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
@@ -4583,9 +4462,7 @@ class _RoomPageState extends State<RoomPage> {
                 icon: const Icon(Icons.copy, size: 18, color: Color(0xFF00F2FE)),
                 onPressed: () {
                   Clipboard.setData(ClipboardData(text: logsText));
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Логи скопированы в буфер!')),
-                  );
+                  /* SnackBar disabled */
                 },
                 tooltip: 'Скопировать логи',
               ),
@@ -5044,7 +4921,11 @@ class WebviewPlayer {
       );
 
     if (controller.platform is AndroidWebViewController) {
-      (controller.platform as AndroidWebViewController).setMediaPlaybackRequiresUserGesture(false);
+      final androidController = (controller.platform as AndroidWebViewController);
+      androidController.setMediaPlaybackRequiresUserGesture(false);
+      try {
+        androidController.setMixedContentMode(MixedContentMode.alwaysAllow);
+      } catch (_) {}
     }
 
     _isInitialized = true;
@@ -5066,6 +4947,8 @@ class WebviewPlayer {
     _logToFile('Opening media resource: $playUrl');
 
     final isProxyOrStream = playUrl.contains('/proxy/') || 
+                            playUrl.contains('/live-stream/') ||
+                            playUrl.contains('/live') ||
                             playUrl.contains('.m3u8') || 
                             playUrl.contains('.mp4') ||
                             playUrl.contains('.mkv') ||
