@@ -406,16 +406,12 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
 
   void _showUpdateDialog(String version, String downloadUrl) {
     final activeTheme = _themes[_themeName] ?? _themes['Dark']!;
-    final context = _navigatorKey.currentContext;
-    if (context == null) {
-      Future.delayed(const Duration(seconds: 1), () => _showUpdateDialog(version, downloadUrl));
-      return;
-    }
+    final dialogParentContext = _navigatorKey.currentContext ?? context;
     
     showDialog(
-      context: context,
+      context: dialogParentContext,
       barrierDismissible: false,
-      builder: (BuildContext context) {
+      builder: (BuildContext dialogContext) {
         return AlertDialog(
           backgroundColor: activeTheme.cardColor,
           shape: RoundedRectangleBorder(
@@ -445,7 +441,7 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.of(context).pop(),
+              onPressed: () => Navigator.of(dialogContext).pop(),
               child: Text(
                 _locale == 'ru' ? 'Позже' : 'Later',
                 style: const TextStyle(color: Colors.white54),
@@ -461,11 +457,11 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
               ),
               icon: const Icon(Icons.downloading, size: 16),
               onPressed: () {
-                  Navigator.of(context).pop();
-                  Future.delayed(const Duration(milliseconds: 300), () {
-                    _downloadAndInstallUpdate(downloadUrl, version);
-                  });
-                },
+                Navigator.of(dialogContext).pop();
+                Future.delayed(const Duration(milliseconds: 100), () {
+                  _downloadAndInstallUpdate(downloadUrl, version, dialogParentContext);
+                });
+              },
               label: Text(
                 _locale == 'ru' ? 'Авто-установка v$version' : 'Auto-Install v$version',
                 style: const TextStyle(fontWeight: FontWeight.bold),
@@ -477,69 +473,82 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
     );
   }
 
-  Future<void> _downloadAndInstallUpdate(String downloadUrl, String version) async {
-    final navContext = _navigatorKey.currentContext;
-    if (navContext == null) return;
+  Future<void> _downloadAndInstallUpdate(String downloadUrl, String version, [BuildContext? parentContext]) async {
+    BuildContext? targetContext = _navigatorKey.currentContext ?? parentContext ?? context;
+    if (targetContext != null && !targetContext.mounted) {
+      targetContext = parentContext ?? context;
+    }
+    if (targetContext == null) {
+      try {
+        await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
+      } catch (_) {}
+      return;
+    }
+
     double progress = 0.0;
     StateSetter? dialogSetState;
     bool isDownloading = true;
     String statusText = _locale == 'ru' ? 'Подключение к серверу...' : 'Connecting to server...';
+    BuildContext? progressDialogContext;
 
     showDialog(
-      context: navContext ?? context,
+      context: targetContext,
       barrierDismissible: false,
-      builder: (dialogCtx) => StatefulBuilder(
-        builder: (context, setState) {
-          dialogSetState = setState;
-          return AlertDialog(
-            backgroundColor: const Color(0xFF161426),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-              side: const BorderSide(color: Color(0xFF00F2FE), width: 1),
-            ),
-            title: Row(
-              children: [
-                if (isDownloading)
-                  const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF00F2FE)))
-                else
-                  const Icon(Icons.check_circle, color: Colors.green),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    _locale == 'ru' ? 'Автообновление v$version' : 'Auto-Updating v$version',
-                    style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
+      builder: (dialogCtx) {
+        progressDialogContext = dialogCtx;
+        return StatefulBuilder(
+          builder: (context, setState) {
+            dialogSetState = setState;
+            return AlertDialog(
+              backgroundColor: const Color(0xFF161426),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+                side: const BorderSide(color: Color(0xFF00F2FE), width: 1),
+              ),
+              title: Row(
+                children: [
+                  if (isDownloading)
+                    const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF00F2FE)))
+                  else
+                    const Icon(Icons.check_circle, color: Colors.green),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      _locale == 'ru' ? 'Автообновление v$version' : 'Auto-Updating v$version',
+                      style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
+                    ),
                   ),
-                ),
-              ],
-            ),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(statusText, style: const TextStyle(color: Colors.white70, fontSize: 13)),
-                const SizedBox(height: 12),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(4),
-                  child: LinearProgressIndicator(
-                    value: progress > 0 ? progress : null,
-                    backgroundColor: Colors.white12,
-                    color: const Color(0xFF00F2FE),
-                    minHeight: 8,
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(statusText, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                  const SizedBox(height: 12),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                      value: progress > 0 ? progress : null,
+                      backgroundColor: Colors.white12,
+                      color: const Color(0xFF00F2FE),
+                      minHeight: 8,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 8),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: Text(
-                    '${(progress * 100).toStringAsFixed(1)}%',
-                    style: const TextStyle(color: Color(0xFF00F2FE), fontSize: 13, fontWeight: FontWeight.bold),
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: Text(
+                      '${(progress * 100).toStringAsFixed(1)}%',
+                      style: const TextStyle(color: Color(0xFF00F2FE), fontSize: 13, fontWeight: FontWeight.bold),
+                    ),
                   ),
-                ),
-              ],
-            ),
-          );
-        },
-      ),
+                ],
+              ),
+            );
+          },
+        );
+      },
     );
 
     try {
@@ -585,7 +594,9 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
       }
 
       await Future.delayed(const Duration(milliseconds: 500));
-      if (mounted) Navigator.of(context).pop();
+      if (progressDialogContext != null && progressDialogContext!.mounted) {
+        Navigator.of(progressDialogContext!).pop();
+      }
 
       // Launch native Android FileProvider package installer
       bool installed = false;
@@ -610,9 +621,8 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
       }
     } catch (e) {
       debugPrint('Auto-download error: $e');
-      if (mounted) Navigator.of(context).pop();
-      if (mounted) {
-         /* SnackBar disabled */
+      if (progressDialogContext != null && progressDialogContext!.mounted) {
+        Navigator.of(progressDialogContext!).pop();
       }
       try {
         await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
@@ -1130,10 +1140,11 @@ class _ConnectionPageState extends State<ConnectionPage> {
 
   void _showUpdateDialog(String version, String downloadUrl) {
     final activeTheme = _themes[widget.themeName] ?? _themes['Dark']!;
+    final dialogParentContext = context;
     showDialog(
-      context: context,
+      context: dialogParentContext,
       barrierDismissible: false,
-      builder: (BuildContext context) {
+      builder: (BuildContext dialogContext) {
         return AlertDialog(
           backgroundColor: activeTheme.cardColor,
           shape: RoundedRectangleBorder(
@@ -1163,7 +1174,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.of(context).pop(),
+              onPressed: () => Navigator.of(dialogContext).pop(),
               child: Text(
                 widget.locale == 'ru' ? 'Позже' : 'Later',
                 style: const TextStyle(color: Colors.white54),
@@ -1179,11 +1190,11 @@ class _ConnectionPageState extends State<ConnectionPage> {
               ),
               icon: const Icon(Icons.downloading, size: 16),
               onPressed: () {
-                  Navigator.of(context).pop();
-                  Future.delayed(const Duration(milliseconds: 300), () {
-                    _downloadAndInstallUpdate(downloadUrl, version);
-                  });
-                },
+                Navigator.of(dialogContext).pop();
+                Future.delayed(const Duration(milliseconds: 100), () {
+                  _downloadAndInstallUpdate(downloadUrl, version, dialogParentContext);
+                });
+              },
               label: Text(
                 widget.locale == 'ru' ? 'Скачать v$version' : 'Download v$version',
                 style: const TextStyle(fontWeight: FontWeight.bold),
@@ -1195,67 +1206,82 @@ class _ConnectionPageState extends State<ConnectionPage> {
     );
   }
 
-  Future<void> _downloadAndInstallUpdate(String downloadUrl, String version) async {
+  Future<void> _downloadAndInstallUpdate(String downloadUrl, String version, [BuildContext? parentContext]) async {
+    BuildContext? targetContext = parentContext ?? context;
+    if (targetContext != null && !targetContext.mounted) {
+      targetContext = context;
+    }
+    if (targetContext == null) {
+      try {
+        await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
+      } catch (_) {}
+      return;
+    }
+
     double progress = 0.0;
     StateSetter? dialogSetState;
     bool isDownloading = true;
     String statusText = widget.locale == 'ru' ? 'Подключение к серверу...' : 'Connecting to server...';
+    BuildContext? progressDialogContext;
 
     showDialog(
-      context: context,
+      context: targetContext,
       barrierDismissible: false,
-      builder: (dialogCtx) => StatefulBuilder(
-        builder: (context, setState) {
-          dialogSetState = setState;
-          return AlertDialog(
-            backgroundColor: const Color(0xFF161426),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-              side: const BorderSide(color: Color(0xFF00F2FE), width: 1),
-            ),
-            title: Row(
-              children: [
-                if (isDownloading)
-                  const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF00F2FE)))
-                else
-                  const Icon(Icons.check_circle, color: Colors.green),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    widget.locale == 'ru' ? 'Автообновление v$version' : 'Auto-Updating v$version',
-                    style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
+      builder: (dialogCtx) {
+        progressDialogContext = dialogCtx;
+        return StatefulBuilder(
+          builder: (context, setState) {
+            dialogSetState = setState;
+            return AlertDialog(
+              backgroundColor: const Color(0xFF161426),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+                side: const BorderSide(color: Color(0xFF00F2FE), width: 1),
+              ),
+              title: Row(
+                children: [
+                  if (isDownloading)
+                    const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF00F2FE)))
+                  else
+                    const Icon(Icons.check_circle, color: Colors.green),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      widget.locale == 'ru' ? 'Автообновление v$version' : 'Auto-Updating v$version',
+                      style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
+                    ),
                   ),
-                ),
-              ],
-            ),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(statusText, style: const TextStyle(color: Colors.white70, fontSize: 13)),
-                const SizedBox(height: 12),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(4),
-                  child: LinearProgressIndicator(
-                    value: progress > 0 ? progress : null,
-                    backgroundColor: Colors.white12,
-                    color: const Color(0xFF00F2FE),
-                    minHeight: 8,
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(statusText, style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                  const SizedBox(height: 12),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                      value: progress > 0 ? progress : null,
+                      backgroundColor: Colors.white12,
+                      color: const Color(0xFF00F2FE),
+                      minHeight: 8,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 8),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: Text(
-                    '${(progress * 100).toStringAsFixed(1)}%',
-                    style: const TextStyle(color: Color(0xFF00F2FE), fontSize: 13, fontWeight: FontWeight.bold),
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: Text(
+                      '${(progress * 100).toStringAsFixed(1)}%',
+                      style: const TextStyle(color: Color(0xFF00F2FE), fontSize: 13, fontWeight: FontWeight.bold),
+                    ),
                   ),
-                ),
-              ],
-            ),
-          );
-        },
-      ),
+                ],
+              ),
+            );
+          },
+        );
+      },
     );
 
     try {
@@ -1301,7 +1327,9 @@ class _ConnectionPageState extends State<ConnectionPage> {
       }
 
       await Future.delayed(const Duration(milliseconds: 500));
-      if (mounted) Navigator.of(context).pop();
+      if (progressDialogContext != null && progressDialogContext!.mounted) {
+        Navigator.of(progressDialogContext!).pop();
+      }
 
       // Launch native Android FileProvider package installer
       bool installed = false;
@@ -1326,9 +1354,8 @@ class _ConnectionPageState extends State<ConnectionPage> {
       }
     } catch (e) {
       debugPrint('Auto-download error: $e');
-      if (mounted) Navigator.of(context).pop();
-      if (mounted) {
-         /* SnackBar disabled */
+      if (progressDialogContext != null && progressDialogContext!.mounted) {
+        Navigator.of(progressDialogContext!).pop();
       }
       try {
         await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
