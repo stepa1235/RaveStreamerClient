@@ -164,7 +164,7 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
-String globalAppVersion = "1.2.1";
+String globalAppVersion = "1.2.2";
 
 bool isNewerVersion(String latest, String current) {
   try {
@@ -2104,6 +2104,8 @@ class _RoomPageState extends State<RoomPage> {
     if (isWebLink &&
         !finalUrl.contains('/video?path=') &&
         !finalUrl.contains('/proxy/') &&
+        !finalUrl.contains('/live-stream/') &&
+        !finalUrl.contains('/live') &&
         !lowercaseUrl.contains('.mp4') &&
         !lowercaseUrl.contains('.m3u8') &&
         !lowercaseUrl.contains('.mkv') &&
