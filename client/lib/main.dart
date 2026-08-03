@@ -1543,13 +1543,15 @@ class _RoomPageState extends State<RoomPage> {
 
       final isHost = _isLocalStreamHost || (_users.isNotEmpty && _users[0]['id'] == _socket.id);
       if (isLive) {
-        try { _mkPlayer?.pause(); } catch (_) {}
-        try { _mkPlayer?.setVolume(0); } catch (_) {}
-        if (!isHost) {
-          _socket.emit('new-viewer', {'roomId': widget.roomId, 'viewerId': _socket.id});
+        if (isHost) {
+          try { _mkPlayer?.pause(); } catch (_) {}
+          try { _mkPlayer?.setVolume(0); } catch (_) {}
+        } else {
+          final serverBase = widget.serverUrl.replaceAll('wss://', 'https://').replaceAll('ws://', 'http://');
+          final streamUrl = '$serverBase/live-stream/${widget.roomId}';
+          _setupVideoPlayer(streamUrl, 'Live Stream', startPlaying: true);
         }
       } else if (videoUrl.isNotEmpty) {
-        try { _mkPlayer?.setVolume(100); } catch (_) {}
         _setupVideoPlayer(videoUrl, videoName, startPlaying: isPlaying, startSeconds: calculatedTime, headers: headers);
       }
     });
@@ -1557,10 +1559,13 @@ class _RoomPageState extends State<RoomPage> {
     _socket.on('stream-started', (_) {
       if (mounted) {
         final isHost = _isLocalStreamHost || (_users.isNotEmpty && _users[0]['id'] == _socket.id);
-        try { _mkPlayer?.pause(); } catch (_) {}
-        try { _mkPlayer?.setVolume(0); } catch (_) {}
-        if (!isHost) {
-          _socket.emit('new-viewer', {'roomId': widget.roomId, 'viewerId': _socket.id});
+        if (isHost) {
+          try { _mkPlayer?.pause(); } catch (_) {}
+          try { _mkPlayer?.setVolume(0); } catch (_) {}
+        } else {
+          final serverBase = widget.serverUrl.replaceAll('wss://', 'https://').replaceAll('ws://', 'http://');
+          final streamUrl = '$serverBase/live-stream/${widget.roomId}';
+          _setupVideoPlayer(streamUrl, 'Live Stream', startPlaying: true);
         }
         setState(() {
           _isLiveStreaming = true;
@@ -2659,7 +2664,7 @@ class _RoomPageState extends State<RoomPage> {
               socket.emit('live-stream-chunk', { roomId, chunk: buffer });
             }
           };
-          mediaRecorder.start(250);
+          mediaRecorder.start(100);
         } catch (mErr) {
           console.log('MediaRecorder error:', mErr);
         }
@@ -2916,9 +2921,10 @@ class _RoomPageState extends State<RoomPage> {
                     child: Stack(
                       fit: StackFit.expand,
                       children: [
-                        if (_isLiveStreaming && _webrtcManager != null)
+                        // Host only: show their own captured screen via WebRTC
+                        if (_isLiveStreaming && _webrtcManager != null && _webrtcManager!.localStream != null)
                           RTCVideoView(
-                            (_webrtcManager!.localStream != null) ? _webrtcManager!.localRenderer : _webrtcManager!.remoteRenderer,
+                            _webrtcManager!.localRenderer,
                             objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
                           )
                         else if (_playerReady && _mkPlayer != null && _mkPlayer!.controller.value.isInitialized)
