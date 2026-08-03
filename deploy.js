@@ -82,7 +82,7 @@ async function deploy() {
     }, JSON.stringify({
       tag_name: releaseTag,
       name: `RaveStreamer ${releaseTag}`,
-      body: 'v1.3.3 Release: Restored PC viewer audio (HTTP stream via _mkPlayer), reduced stream latency from ~10s to ~100ms (MediaRecorder interval 250ms→100ms, server buffer reduced to 1s), host echo prevention retained.'
+      body: 'v1.3.3 Release: Restored PC viewer audio playback via _mkPlayer, fixed tab stream echo, prevented host self-playback, and optimized stream latency to ~100ms.'
     }));
   }
 
