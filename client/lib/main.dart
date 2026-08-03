@@ -1552,12 +1552,17 @@ class _RoomPageState extends State<RoomPage> {
 
     _socket.on('stream-started', (_) {
       if (mounted) {
-        final serverBase = widget.serverUrl.replaceAll('wss://', 'https://').replaceAll('ws://', 'http://');
-        final streamUrl = '$serverBase/live-stream/${widget.roomId}';
+        final isHost = _users.isNotEmpty && _users[0]['id'] == _socket.id;
+        if (isHost) {
+          try { _mkPlayer?.setVolume(0); } catch (_) {}
+        } else {
+          final serverBase = widget.serverUrl.replaceAll('wss://', 'https://').replaceAll('ws://', 'http://');
+          final streamUrl = '$serverBase/live-stream/${widget.roomId}';
+          _setupVideoPlayer(streamUrl, 'Live Stream', startPlaying: true);
+        }
         setState(() {
           _isLiveStreaming = true;
         });
-        _setupVideoPlayer(streamUrl, 'Live Stream', startPlaying: true);
         _triggerControlsVisibility();
       }
     });
@@ -1567,6 +1572,7 @@ class _RoomPageState extends State<RoomPage> {
         setState(() {
           _isLiveStreaming = false;
         });
+        try { _mkPlayer?.setVolume(100); } catch (_) {}
         try { _mkPlayer?.open(Media('')); } catch (_) {}
         try { _mkPlayer?.pause(); } catch (_) {}
       }
@@ -3036,8 +3042,33 @@ class _RoomPageState extends State<RoomPage> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Progress Slider
-                  Row(
+                  // Progress Slider / LIVE badge
+                  _isLiveStreaming
+                      ? Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.red.withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: Colors.redAccent, width: 1),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: const [
+                              Icon(Icons.circle, color: Colors.redAccent, size: 10),
+                              SizedBox(width: 6),
+                              Text(
+                                'ПРЯМОЙ ЭФИР',
+                                style: TextStyle(
+                                  color: Colors.redAccent,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 1.0,
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                      : Row(
                     children: [
                       Text(
                         formatDuration(position),

@@ -1878,8 +1878,24 @@ class _RoomPageState extends State<RoomPage> {
     return lastResponse!;
   }
 
-  // Socket.io initialization and handlers
   void _initSocket() {
+    _mkPlayer?.onWebRTCAnswer = (targetId, answer) {
+      _socket.emit('webrtc-answer', {
+        'targetId': targetId,
+        'senderId': _socket.id,
+        'answer': answer,
+        'roomId': widget.roomId,
+      });
+    };
+    _mkPlayer?.onWebRTCIceCandidate = (targetId, candidate) {
+      _socket.emit('webrtc-ice-candidate', {
+        'targetId': targetId,
+        'senderId': _socket.id,
+        'candidate': candidate,
+        'roomId': widget.roomId,
+      });
+    };
+
     _socket = IO.io(widget.serverUrl, IO.OptionBuilder()
       .setTransports(['websocket'])
       .disableAutoConnect()
@@ -2050,10 +2066,15 @@ class _RoomPageState extends State<RoomPage> {
         _isLiveStreaming = isLive;
       });
 
+      final isHost = _users.isNotEmpty && _users[0]['id'] == _socket.id;
       if (isLive) {
-        final serverBase = widget.serverUrl.replaceAll('wss://', 'https://').replaceAll('ws://', 'http://');
-        final streamUrl = '$serverBase/live-stream/${widget.roomId}';
-        _setupVideoPlayer(streamUrl, 'Live Stream', startPlaying: true);
+        if (isHost) {
+          try { _mkPlayer?.setVolume(0); } catch (_) {}
+        } else {
+          final serverBase = widget.serverUrl.replaceAll('wss://', 'https://').replaceAll('ws://', 'http://');
+          final streamUrl = '$serverBase/live-stream/${widget.roomId}';
+          _setupVideoPlayer(streamUrl, 'Live Stream', startPlaying: true);
+        }
       } else if (videoUrl.isNotEmpty) {
         _setupVideoPlayer(videoUrl, videoName, startPlaying: isPlaying, startSeconds: calculatedTime, headers: headers);
       }
@@ -2061,13 +2082,41 @@ class _RoomPageState extends State<RoomPage> {
 
     _socket.on('stream-started', (_) {
       if (mounted) {
-        final serverBase = widget.serverUrl.replaceAll('wss://', 'https://').replaceAll('ws://', 'http://');
-        final streamUrl = '$serverBase/live-stream/${widget.roomId}';
+        final isHost = _users.isNotEmpty && _users[0]['id'] == _socket.id;
+        if (isHost) {
+          try { _mkPlayer?.setVolume(0); } catch (_) {}
+        } else {
+          final serverBase = widget.serverUrl.replaceAll('wss://', 'https://').replaceAll('ws://', 'http://');
+          final streamUrl = '$serverBase/live-stream/${widget.roomId}';
+          _setupVideoPlayer(streamUrl, 'Live Stream', startPlaying: true);
+          _socket.emit('new-viewer', {'roomId': widget.roomId, 'viewerId': _socket.id});
+        }
         setState(() {
           _isLiveStreaming = true;
         });
-        _setupVideoPlayer(streamUrl, 'Live Stream', startPlaying: true);
         _triggerControlsVisibility();
+      }
+    });
+
+    _socket.on('webrtc-offer', (data) {
+      if (_isDisposed || !mounted) return;
+      if (data['targetId'] == _socket.id) {
+        final senderId = data['senderId'] as String?;
+        final offer = data['offer'];
+        if (senderId != null && offer != null) {
+          _mkPlayer?.openWebRTC(senderId, offer);
+        }
+      }
+    });
+
+    _socket.on('webrtc-ice-candidate', (data) {
+      if (_isDisposed || !mounted) return;
+      if (data['targetId'] == _socket.id) {
+        final senderId = data['senderId'] as String?;
+        final candidate = data['candidate'];
+        if (senderId != null && candidate != null) {
+          _mkPlayer?.addIceCandidate(senderId, candidate);
+        }
       }
     });
 
@@ -2076,6 +2125,7 @@ class _RoomPageState extends State<RoomPage> {
         setState(() {
           _isLiveStreaming = false;
         });
+        try { _mkPlayer?.setVolume(100); } catch (_) {}
         try { _mkPlayer?.open(Media('')); } catch (_) {}
         try { _mkPlayer?.pause(); } catch (_) {}
       }
@@ -3251,8 +3301,33 @@ class _RoomPageState extends State<RoomPage> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Progress Slider
-                  Row(
+                  // Progress Slider / LIVE badge
+                  _isLiveStreaming
+                      ? Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.red.withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: Colors.redAccent, width: 1),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: const [
+                              Icon(Icons.circle, color: Colors.redAccent, size: 10),
+                              SizedBox(width: 6),
+                              Text(
+                                'ПРЯМОЙ ЭФИР',
+                                style: TextStyle(
+                                  color: Colors.redAccent,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 1.0,
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                      : Row(
                     children: [
                       Text(
                         formatDuration(position),
@@ -4754,6 +4829,8 @@ class WebviewPlayer {
   late final WebViewController controller;
   final state = WebviewPlayerState();
   final stream = WebviewPlayerStream();
+  Function(String targetId, dynamic answer)? onWebRTCAnswer;
+  Function(String targetId, dynamic candidate)? onWebRTCIceCandidate;
   bool _isInitialized = false;
   bool _isPageReady = false;
   Map<String, dynamic>? _pendingLoadCmd;
@@ -4938,6 +5015,18 @@ class WebviewPlayer {
               stream._playingController.add(state.playing);
               stream._positionController.add(state.position);
               stream._durationController.add(state.duration);
+            } else if (type == 'webrtc_answer') {
+              final targetId = data['targetId'] as String?;
+              final answer = data['answer'];
+              if (targetId != null && answer != null) {
+                onWebRTCAnswer?.call(targetId, answer);
+              }
+            } else if (type == 'webrtc_ice') {
+              final targetId = data['targetId'] as String?;
+              final candidate = data['candidate'];
+              if (targetId != null && candidate != null) {
+                onWebRTCIceCandidate?.call(targetId, candidate);
+              }
             } else if (type == 'ended') {
               stream._completedController.add(true);
             } else if (type == 'log') {
@@ -4966,6 +5055,28 @@ class WebviewPlayer {
     } else {
       await controller.loadHtmlString(_htmlPlayerCode);
     }
+  }
+
+  Future<void> openWebRTC(String senderId, dynamic offer) async {
+    if (!_isInitialized) return;
+    final cmd = {
+      'action': 'webrtc_offer',
+      'senderId': senderId,
+      'offer': offer
+    };
+    final jsonStr = jsonEncode(cmd).replaceAll("'", "\\'");
+    await controller.runJavaScript("window.postMessage('$jsonStr', '*')");
+  }
+
+  Future<void> addIceCandidate(String senderId, dynamic candidate) async {
+    if (!_isInitialized) return;
+    final cmd = {
+      'action': 'webrtc_ice',
+      'senderId': senderId,
+      'candidate': candidate
+    };
+    final jsonStr = jsonEncode(cmd).replaceAll("'", "\\'");
+    await controller.runJavaScript("window.postMessage('$jsonStr', '*')");
   }
 
   bool _isEmbedActive = false;
@@ -5241,6 +5352,10 @@ const String _htmlPlayerCode = r'''
             video.src = cmd.url;
             if (cmd.play) safePlay();
           }
+        } else if (cmd.action === 'webrtc_offer') {
+          handleWebRTCOffer(cmd.senderId, cmd.offer);
+        } else if (cmd.action === 'webrtc_ice') {
+          handleWebRTCIce(cmd.senderId, cmd.candidate);
         } else if (cmd.action === 'play') {
           video.muted = false;
           safePlay();
@@ -5251,6 +5366,7 @@ const String _htmlPlayerCode = r'''
           video.removeAttribute('src');
           video.load();
           if (window.hls) { hls.destroy(); hls = null; }
+          if (window.webrtcPC) { try { window.webrtcPC.close(); } catch(_) {} window.webrtcPC = null; }
         } else if (cmd.action === 'seek') {
           video.currentTime = cmd.time;
         } else if (cmd.action === 'volume') {
@@ -5264,6 +5380,56 @@ const String _htmlPlayerCode = r'''
         });
       }
     });
+
+    function handleWebRTCOffer(senderId, offer) {
+      console.log('WebRTC offer received from host ' + senderId);
+      if (window.webrtcPC) { try { window.webrtcPC.close(); } catch(_) {} }
+      window.webrtcPC = new RTCPeerConnection({
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun.yandex.ru:3478' }
+        ]
+      });
+
+      window.webrtcPC.ontrack = function(event) {
+        console.log('WebRTC Track received from host!');
+        video.srcObject = event.streams[0];
+        safePlay();
+      };
+
+      window.webrtcPC.onicecandidate = function(event) {
+        if (event.candidate) {
+          postMessageToFlutter({
+            type: 'webrtc_ice',
+            targetId: senderId,
+            candidate: event.candidate
+          });
+        }
+      };
+
+      window.webrtcPC.setRemoteDescription(new RTCSessionDescription(offer))
+        .then(function() { return window.webrtcPC.createAnswer(); })
+        .then(function(answer) { return window.webrtcPC.setLocalDescription(answer); })
+        .then(function() {
+          postMessageToFlutter({
+            type: 'webrtc_answer',
+            targetId: senderId,
+            answer: window.webrtcPC.localDescription
+          });
+        })
+        .catch(function(err) {
+          console.error('WebRTC offer error: ' + err.message);
+        });
+    }
+
+    function handleWebRTCIce(senderId, candidate) {
+      if (window.webrtcPC && candidate) {
+        window.webrtcPC.addIceCandidate(new RTCIceCandidate(candidate)).catch(function(e) {
+          console.error('ICE candidate error: ' + e.message);
+        });
+      }
+    }
     
     postMessageToFlutter({ type: 'ready' });
   </script>
