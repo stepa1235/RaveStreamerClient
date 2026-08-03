@@ -1543,15 +1543,13 @@ class _RoomPageState extends State<RoomPage> {
 
       final isHost = _isLocalStreamHost || (_users.isNotEmpty && _users[0]['id'] == _socket.id);
       if (isLive) {
-        if (isHost) {
-          try { _mkPlayer?.open(Media('')); } catch (_) {}
-          try { _mkPlayer?.pause(); } catch (_) {}
-        } else {
-          final serverBase = widget.serverUrl.replaceAll('wss://', 'https://').replaceAll('ws://', 'http://');
-          final streamUrl = '$serverBase/live-stream/${widget.roomId}';
-          _setupVideoPlayer(streamUrl, 'Live Stream', startPlaying: true);
+        try { _mkPlayer?.pause(); } catch (_) {}
+        try { _mkPlayer?.setVolume(0); } catch (_) {}
+        if (!isHost) {
+          _socket.emit('new-viewer', {'roomId': widget.roomId, 'viewerId': _socket.id});
         }
       } else if (videoUrl.isNotEmpty) {
+        try { _mkPlayer?.setVolume(100); } catch (_) {}
         _setupVideoPlayer(videoUrl, videoName, startPlaying: isPlaying, startSeconds: calculatedTime, headers: headers);
       }
     });
@@ -1559,13 +1557,10 @@ class _RoomPageState extends State<RoomPage> {
     _socket.on('stream-started', (_) {
       if (mounted) {
         final isHost = _isLocalStreamHost || (_users.isNotEmpty && _users[0]['id'] == _socket.id);
-        if (isHost) {
-          try { _mkPlayer?.open(Media('')); } catch (_) {}
-          try { _mkPlayer?.pause(); } catch (_) {}
-        } else {
-          final serverBase = widget.serverUrl.replaceAll('wss://', 'https://').replaceAll('ws://', 'http://');
-          final streamUrl = '$serverBase/live-stream/${widget.roomId}';
-          _setupVideoPlayer(streamUrl, 'Live Stream', startPlaying: true);
+        try { _mkPlayer?.pause(); } catch (_) {}
+        try { _mkPlayer?.setVolume(0); } catch (_) {}
+        if (!isHost) {
+          _socket.emit('new-viewer', {'roomId': widget.roomId, 'viewerId': _socket.id});
         }
         setState(() {
           _isLiveStreaming = true;
@@ -2635,10 +2630,10 @@ class _RoomPageState extends State<RoomPage> {
             height: { ideal: 720 }
           },
           audio: {
-            echoCancellation: false,
-            noiseSuppression: false,
+            echoCancellation: true,
+            noiseSuppression: true,
             autoGainControl: false,
-            channelCount: 2
+            suppressLocalAudioPlayback: "true"
           },
           systemAudio: "include"
         });

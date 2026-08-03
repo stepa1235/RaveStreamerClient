@@ -136,7 +136,10 @@ class WebRTCManager {
   // --- VIEWER SPECIFIC ---
 
   Future<void> _handleOffer(dynamic data) async {
-    if (isHostResolver() && localStream != null) return; // Host shouldn't receive offers if natively streaming
+    if (isHostResolver()) {
+      debugPrint('Host received webrtc-offer, ignoring to prevent self-echo.');
+      return;
+    }
     
     final senderId = data['senderId'];
     final offerData = data['offer'];
