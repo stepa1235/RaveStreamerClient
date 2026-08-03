@@ -42,9 +42,9 @@ class WebRTCManager {
 
     if (Platform.isAndroid || Platform.isIOS) {
       try {
-        Helper.setSpeakerphoneOn(true);
+        MethodChannel('com.example.client/permissions').invokeMethod('setMediaAudioMode');
       } catch (e) {
-        debugPrint('Failed to set speakerphone: $e');
+        debugPrint('Failed to set media audio mode: $e');
       }
     }
 
@@ -164,7 +164,7 @@ class WebRTCManager {
       pc.onAddStream = (stream) {
         remoteRenderer.srcObject = stream;
         if (Platform.isAndroid || Platform.isIOS) {
-          try { Helper.setSpeakerphoneOn(true); } catch (_) {}
+          try { MethodChannel('com.example.client/permissions').invokeMethod('setMediaAudioMode'); } catch (_) {}
         }
         onStreamStarted?.call();
       };

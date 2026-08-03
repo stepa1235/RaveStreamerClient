@@ -73,8 +73,13 @@ class MainActivity : FlutterActivity() {
                 }
                 "setMediaAudioMode" -> {
                     try {
+                        volumeControlStream = android.media.AudioManager.STREAM_MUSIC
                         val audioManager = getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
                         audioManager.mode = android.media.AudioManager.MODE_NORMAL
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                            audioManager.clearCommunicationDevice()
+                        }
+                        @Suppress("DEPRECATION")
                         audioManager.isSpeakerphoneOn = true
                         
                         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {

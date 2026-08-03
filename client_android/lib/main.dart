@@ -163,7 +163,7 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
-String globalAppVersion = "1.1.56";
+String globalAppVersion = "1.1.57";
 
 bool isNewerVersion(String latest, String current) {
   try {
@@ -2393,6 +2393,11 @@ class _RoomPageState extends State<RoomPage> {
     if (player == null) return;
 
     try {
+      if (Platform.isAndroid) {
+        try {
+          const MethodChannel('com.example.client/permissions').invokeMethod('setMediaAudioMode');
+        } catch (_) {}
+      }
       // Reuse the pre-created player — Webview is always in the tree.
       await player.open(
         Media(playUrl, httpHeaders: playerHeaders),
