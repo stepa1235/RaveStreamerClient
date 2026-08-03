@@ -163,7 +163,7 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
-String globalAppVersion = "1.1.51";
+String globalAppVersion = "1.1.52";
 
 bool isNewerVersion(String latest, String current) {
   try {
@@ -606,21 +606,26 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
       await Future.delayed(const Duration(milliseconds: 500));
       if (mounted) Navigator.of(context).pop();
 
-      // Launch installer
+      // Launch native Android FileProvider package installer
       bool installed = false;
       try {
-        await InstallApk().installApk(apkPath);
-        installed = true;
+        const platform = MethodChannel('com.example.client/permissions');
+        await platform.invokeMethod('requestInstallPermission');
+        final res = await platform.invokeMethod('installApk', {'filePath': apkPath});
+        installed = res == true;
       } catch (e) {
-        debugPrint('InstallApk error: $e');
+        debugPrint('Native installApk error: $e');
       }
 
       if (!installed) {
-        final result = await OpenFilex.open(apkPath, type: "application/vnd.android.package-archive");
-        debugPrint('OpenFilex result: ${result.type} - ${result.message}');
-        if (result.type != ResultType.done) {
-          await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
-        }
+        try {
+          final result = await OpenFilex.open(apkPath, type: "application/vnd.android.package-archive");
+          if (result.type == ResultType.done) installed = true;
+        } catch (_) {}
+      }
+
+      if (!installed) {
+        await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
       }
     } catch (e) {
       debugPrint('Auto-download error: $e');
@@ -1334,6 +1339,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
       bool installed = false;
       try {
         const platform = MethodChannel('com.example.client/permissions');
+        await platform.invokeMethod('requestInstallPermission');
         final res = await platform.invokeMethod('installApk', {'filePath': apkPath});
         installed = res == true;
       } catch (e) {
@@ -1342,19 +1348,13 @@ class _ConnectionPageState extends State<ConnectionPage> {
 
       if (!installed) {
         try {
-          await InstallApk().installApk(apkPath);
-          installed = true;
-        } catch (e) {
-          debugPrint('InstallApk error: $e');
-        }
+          final result = await OpenFilex.open(apkPath, type: "application/vnd.android.package-archive");
+          if (result.type == ResultType.done) installed = true;
+        } catch (_) {}
       }
 
       if (!installed) {
-        final result = await OpenFilex.open(apkPath, type: "application/vnd.android.package-archive");
-        debugPrint('OpenFilex result: ${result.type} - ${result.message}');
-        if (result.type != ResultType.done) {
-          await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
-        }
+        await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
       }
     } catch (e) {
       debugPrint('Auto-download error: $e');
@@ -4524,21 +4524,26 @@ class _RoomPageState extends State<RoomPage> {
       await Future.delayed(const Duration(milliseconds: 500));
       if (mounted) Navigator.of(context).pop();
 
-      // Launch installer
+      // Launch native Android FileProvider package installer
       bool installed = false;
       try {
-        await InstallApk().installApk(apkPath);
-        installed = true;
+        const platform = MethodChannel('com.example.client/permissions');
+        await platform.invokeMethod('requestInstallPermission');
+        final res = await platform.invokeMethod('installApk', {'filePath': apkPath});
+        installed = res == true;
       } catch (e) {
-        debugPrint('InstallApk error: $e');
+        debugPrint('Native installApk error: $e');
       }
 
       if (!installed) {
-        final result = await OpenFilex.open(apkPath, type: "application/vnd.android.package-archive");
-        debugPrint('OpenFilex result: ${result.type} ${result.message}');
-        if (result.type != ResultType.done) {
-          await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
-        }
+        try {
+          final result = await OpenFilex.open(apkPath, type: "application/vnd.android.package-archive");
+          if (result.type == ResultType.done) installed = true;
+        } catch (_) {}
+      }
+
+      if (!installed) {
+        await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
       }
     } catch (e) {
       debugPrint('Auto-download error: $e');
