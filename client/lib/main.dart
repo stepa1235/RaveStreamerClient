@@ -819,46 +819,51 @@ class _ConnectionPageState extends State<ConnectionPage> {
   }
 
   void _showGlobalSettingsDialog(BuildContext context) {
-    showModalBottomSheet(
+    showDialog(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
       builder: (ctx) {
-        return Container(
-          decoration: const BoxDecoration(
-            color: Color(0xFF161426),
-            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-          ),
-          padding: EdgeInsets.only(
-            left: 20,
-            right: 20,
-            top: 20,
-            bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
-          ),
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(Icons.settings, color: Color(0xFF00F2FE)),
-                        const SizedBox(width: 8),
-                        Text(
-                          widget.locale == 'ru' ? 'Настройки приложения ⚙️' : 'App Settings ⚙️',
-                          style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-                        ),
-                      ],
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close, color: Colors.white54),
-                      onPressed: () => Navigator.of(ctx).pop(),
-                    ),
-                  ],
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 550),
+            decoration: BoxDecoration(
+              color: const Color(0xFF161426),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: Colors.white.withOpacity(0.1), width: 1),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.5),
+                  blurRadius: 25,
+                  spreadRadius: 2,
                 ),
+              ],
+            ),
+            padding: const EdgeInsets.all(24),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.settings, color: Color(0xFF00F2FE)),
+                          const SizedBox(width: 8),
+                          Text(
+                            widget.locale == 'ru' ? 'Настройки приложения' : 'App Settings',
+                            style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close, color: Colors.white54),
+                        onPressed: () => Navigator.of(ctx).pop(),
+                      ),
+                    ],
+                  ),
                 const Divider(color: Colors.white12),
                 const SizedBox(height: 12),
 
@@ -979,9 +984,10 @@ class _ConnectionPageState extends State<ConnectionPage> {
               ],
             ),
           ),
-        );
-      },
-    );
+        ),
+      );
+    },
+  );
   }
 
   Future<void> _fetchVersionFromServer(String dummy, {bool verbose = false}) async {
@@ -1161,7 +1167,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
                             ),
                             icon: const Icon(Icons.settings, size: 16),
                             label: Text(
-                              widget.locale == 'ru' ? 'Настройки ⚙️' : 'Settings ⚙️',
+                              widget.locale == 'ru' ? 'Настройки' : 'Settings',
                               style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
                             ),
                             onPressed: () => _showGlobalSettingsDialog(context),
