@@ -21,8 +21,8 @@ import 'package:apk_sideload/install_apk.dart';
 
 const Map<String, Map<String, String>> _localizedValues = {
   'en': {
-    'title': 'RaveStreamer',
-    'subtitle': 'Synchronized Video Co-Watching',
+    'title': 'Luna',
+    'subtitle': '',
     'nameLabel': 'Your Name (Max 15 chars)',
     'nameHint': 'Enter your name',
     'roomLabel': 'Room Name / ID (English only)',
@@ -70,8 +70,8 @@ const Map<String, Map<String, String>> _localizedValues = {
     'themePurple': 'Retro Purple',
   },
   'ru': {
-    'title': 'RaveStreamer',
-    'subtitle': 'Синхронный просмотр видео',
+    'title': 'Luna',
+    'subtitle': '',
     'nameLabel': 'Ваше имя (макс. 15 симв.)',
     'nameHint': 'Введите ваше имя',
     'roomLabel': 'Имя комнаты (только англ.)',
@@ -1475,14 +1475,6 @@ class _ConnectionPageState extends State<ConnectionPage> {
                                 fontWeight: FontWeight.bold,
                                 letterSpacing: 1.5,
                                 color: Colors.white,
-                              ),
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              _loc('subtitle'),
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: Colors.white.withOpacity(0.5),
                               ),
                             ),
                           ],

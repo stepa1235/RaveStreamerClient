@@ -23,8 +23,8 @@ import 'package:path_provider/path_provider.dart';
 
 const Map<String, Map<String, String>> _localizedValues = {
   'en': {
-    'title': 'RaveStreamer',
-    'subtitle': 'Synchronized Video Co-Watching',
+    'title': 'Luna',
+    'subtitle': '',
     'nameLabel': 'Your Name (Max 15 chars)',
     'nameHint': 'Enter your name',
     'roomLabel': 'Room Name / ID (English only)',
@@ -72,8 +72,8 @@ const Map<String, Map<String, String>> _localizedValues = {
     'themePurple': 'Retro Purple',
   },
   'ru': {
-    'title': 'RaveStreamer',
-    'subtitle': 'Синхронный просмотр видео',
+    'title': 'Luna',
+    'subtitle': '',
     'nameLabel': 'Ваше имя (макс. 15 симв.)',
     'nameHint': 'Введите ваше имя',
     'roomLabel': 'Имя комнаты (только англ.)',
@@ -818,6 +818,292 @@ class _ConnectionPageState extends State<ConnectionPage> {
     );
   }
 
+  void _showGlobalSettingsDialog(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return Container(
+          decoration: const BoxDecoration(
+            color: Color(0xFF161426),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          padding: EdgeInsets.only(
+            left: 20,
+            right: 20,
+            top: 20,
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.settings, color: Color(0xFF00F2FE)),
+                        const SizedBox(width: 8),
+                        Text(
+                          widget.locale == 'ru' ? 'Настройки приложения ⚙️' : 'App Settings ⚙️',
+                          style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                        ),
+                      ],
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white54),
+                      onPressed: () => Navigator.of(ctx).pop(),
+                    ),
+                  ],
+                ),
+                const Divider(color: Colors.white12),
+                const SizedBox(height: 12),
+
+                // Language Card
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(12)),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(widget.locale == 'ru' ? 'Язык / Language' : 'Language', style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+                      Row(
+                        children: [
+                          ChoiceChip(
+                            label: const Text('RU'),
+                            selected: widget.locale == 'ru',
+                            onSelected: (_) => widget.onLocaleChange('ru'),
+                            selectedColor: const Color(0xFF6C63FF),
+                          ),
+                          const SizedBox(width: 8),
+                          ChoiceChip(
+                            label: const Text('EN'),
+                            selected: widget.locale == 'en',
+                            onSelected: (_) => widget.onLocaleChange('en'),
+                            selectedColor: const Color(0xFF6C63FF),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                // Theme Card
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(12)),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(widget.locale == 'ru' ? 'Тема оформления' : 'App Theme', style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        children: [
+                          'Dark', 'Neon Cyan', 'Sunset Gold', 'Retro Purple'
+                        ].map((t) => ChoiceChip(
+                          label: Text(t),
+                          selected: widget.themeName == t,
+                          onSelected: (_) => widget.onThemeChange(t),
+                          selectedColor: const Color(0xFF00F2FE).withOpacity(0.4),
+                        )).toList(),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+
+                // Chat Font Size Card
+                StatefulBuilder(
+                  builder: (context, setSt) {
+                    return Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(12)),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(widget.locale == 'ru' ? 'Шрифт чата' : 'Chat Font Size', style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+                              Text('${widget.chatFontSize.toInt()} px', style: const TextStyle(color: Color(0xFF00F2FE), fontSize: 12)),
+                            ],
+                          ),
+                          Slider(
+                            min: 10.0,
+                            max: 24.0,
+                            divisions: 14,
+                            value: widget.chatFontSize,
+                            activeColor: const Color(0xFF6C63FF),
+                            onChanged: (val) {
+                              setSt(() {});
+                              widget.onChatFontSizeChange(val);
+                            },
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+                const SizedBox(height: 12),
+
+                // Auto-Update Card
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(12)),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.system_update, size: 16, color: Color(0xFF00F2FE)),
+                          const SizedBox(width: 8),
+                          Text('${widget.locale == 'ru' ? 'О приложении' : 'About'} ($globalAppVersion)', style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+                        ],
+                      ),
+                      ElevatedButton(
+                        onPressed: () {
+                          Navigator.of(ctx).pop();
+                          _fetchVersionFromServer(_serverController.text.trim(), verbose: true);
+                        },
+                        style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00F2FE).withOpacity(0.2), foregroundColor: const Color(0xFF00F2FE)),
+                        child: Text(widget.locale == 'ru' ? 'Проверить' : 'Check'),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _fetchVersionFromServer(String dummy, {bool verbose = false}) async {
+    try {
+      final releaseRes = await http.get(
+        Uri.parse('https://api.github.com/repos/stepa1235/RaveStreamerClient/releases/latest'),
+        headers: {
+          'User-Agent': 'LunaApp/1.0',
+          'Accept': 'application/vnd.github.v3+json',
+          'Cache-Control': 'no-cache',
+        },
+      ).timeout(const Duration(seconds: 5));
+
+      if (releaseRes.statusCode == 200) {
+        final releaseData = jsonDecode(releaseRes.body) as Map<String, dynamic>;
+        final tagName = (releaseData['tag_name'] as String? ?? '').replaceAll('v', '');
+        final assets = (releaseData['assets'] as List<dynamic>? ?? []);
+        
+        String apkUrl = '';
+        String winUrl = '';
+        for (var asset in assets) {
+          final name = asset['name'] as String? ?? '';
+          final url = asset['browser_download_url'] as String? ?? '';
+          if (name.endsWith('.apk')) apkUrl = url;
+          if (name.endsWith('.zip')) winUrl = url;
+        }
+
+        if (tagName.isNotEmpty) {
+          if (_isNewerVersion(tagName, globalAppVersion)) {
+            final url = Platform.isWindows ? winUrl : apkUrl;
+            if (url.isNotEmpty && mounted) {
+              _showUpdateDialog(tagName, url);
+              return;
+            }
+          } else if (verbose && mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(widget.locale == 'ru' ? 'У вас установлена последняя версия Luna!' : 'You have the latest version of Luna!'),
+                backgroundColor: const Color(0xFF00F2FE),
+              ),
+            );
+            return;
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('GitHub Releases API check error: $e');
+    }
+
+    if (verbose && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(widget.locale == 'ru' ? 'У вас установлена последняя версия Luna!' : 'You have the latest version of Luna!'),
+          backgroundColor: const Color(0xFF00F2FE),
+        ),
+      );
+    }
+  }
+
+  bool _isNewerVersion(String latest, String current) {
+    try {
+      final cleanLatest = latest.split('+')[0];
+      final cleanCurrent = current.split('+')[0];
+      final lParts = cleanLatest.split('.').map(int.parse).toList();
+      final cParts = cleanCurrent.split('.').map(int.parse).toList();
+      for (int i = 0; i < lParts.length && i < cParts.length; i++) {
+        if (lParts[i] > cParts[i]) return true;
+        if (lParts[i] < cParts[i]) return false;
+      }
+      return lParts.length > cParts.length;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void _showUpdateDialog(String version, String downloadUrl) {
+    final activeTheme = _themes[widget.themeName] ?? _themes['Dark']!;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          backgroundColor: activeTheme.cardColor,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16.0),
+            side: BorderSide(color: activeTheme.primary.withOpacity(0.3), width: 1),
+          ),
+          title: Text(
+            widget.locale == 'ru' ? 'Доступно обновление v$version! 🚀' : 'Update Available v$version! 🚀',
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                widget.locale == 'ru'
+                    ? 'Вышла новая версия Luna v$version.\nНажмите ссылку ниже для скачивания:'
+                    : 'A new version of Luna v$version is available.\nClick link below to download:',
+                style: const TextStyle(color: Colors.white70, fontSize: 13),
+              ),
+              const SizedBox(height: 12),
+              SelectableText(
+                downloadUrl,
+                style: const TextStyle(color: Color(0xFF00F2FE), fontSize: 11, decoration: TextDecoration.underline),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: Text(
+                widget.locale == 'ru' ? 'Закрыть' : 'Close',
+                style: const TextStyle(color: Colors.white54),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final themeData = _themes[widget.themeName] ?? _themes['Dark']!;
@@ -859,24 +1145,43 @@ class _ConnectionPageState extends State<ConnectionPage> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      // Language Selector Row
-                      Align(
-                        alignment: Alignment.topRight,
-                        child: DropdownButtonHideUnderline(
-                          child: DropdownButton<String>(
-                            value: widget.locale,
-                            dropdownColor: const Color(0xFF161426),
-                            style: const TextStyle(fontSize: 12, color: Colors.white),
-                            icon: const Icon(Icons.language, size: 16, color: Color(0xFF00F2FE)),
-                            items: const [
-                              DropdownMenuItem(value: 'ru', child: Text('RU')),
-                              DropdownMenuItem(value: 'en', child: Text('EN')),
-                            ],
-                            onChanged: (lang) {
-                              if (lang != null) widget.onLocaleChange(lang);
-                            },
+                      // Top Action Bar: Settings & Language
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF6C63FF).withOpacity(0.2),
+                              foregroundColor: const Color(0xFF00F2FE),
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
+                                side: const BorderSide(color: Color(0xFF00F2FE), width: 0.8),
+                              ),
+                            ),
+                            icon: const Icon(Icons.settings, size: 16),
+                            label: Text(
+                              widget.locale == 'ru' ? 'Настройки ⚙️' : 'Settings ⚙️',
+                              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                            ),
+                            onPressed: () => _showGlobalSettingsDialog(context),
                           ),
-                        ),
+                          DropdownButtonHideUnderline(
+                            child: DropdownButton<String>(
+                              value: widget.locale,
+                              dropdownColor: const Color(0xFF161426),
+                              style: const TextStyle(fontSize: 12, color: Colors.white),
+                              icon: const Icon(Icons.language, size: 16, color: Color(0xFF00F2FE)),
+                              items: const [
+                                DropdownMenuItem(value: 'ru', child: Text('RU')),
+                                DropdownMenuItem(value: 'en', child: Text('EN')),
+                              ],
+                              onChanged: (lang) {
+                                if (lang != null) widget.onLocaleChange(lang);
+                              },
+                            ),
+                          ),
+                        ],
                       ),
                       const SizedBox(height: 8),
 
@@ -911,14 +1216,6 @@ class _ConnectionPageState extends State<ConnectionPage> {
                                 fontWeight: FontWeight.bold,
                                 letterSpacing: 1.5,
                                 color: Colors.white,
-                              ),
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              _loc('subtitle'),
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: Colors.white.withOpacity(0.5),
                               ),
                             ),
                           ],
