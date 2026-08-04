@@ -569,8 +569,8 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
           ),
           content: Text(
             _locale == 'ru'
-                ? 'Доступна новая версия RaveStreamer v$version (текущая v$globalAppVersion).\nХотите обновиться?'
-                : 'A new version of RaveStreamer v$version is available (current v$globalAppVersion).\nDo you want to update?',
+                ? 'Доступна новая версия Luna v$version (текущая v$globalAppVersion).\nХотите обновиться?'
+                : 'A new version of Luna v$version is available (current v$globalAppVersion).\nDo you want to update?',
             style: const TextStyle(color: Colors.white70),
           ),
           actions: [
@@ -2880,7 +2880,7 @@ class _RoomPageState extends State<RoomPage> {
 <html>
 <head>
   <meta charset="utf-8">
-  <title>RaveStreamer - Трансляция</title>
+  <title>Luna - Трансляция</title>
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
   <style>
     body { background-color: #161426; color: white; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; font-family: sans-serif; text-align: center; }
@@ -2892,7 +2892,7 @@ class _RoomPageState extends State<RoomPage> {
   </style>
 </head>
 <body>
-  <h2>Трансляция вкладки для RaveStreamer</h2>
+  <h2>Трансляция вкладки для Luna</h2>
   
   <div class="warning">
     🛑 ВНИМАНИЕ: Откройте фильм в соседней вкладке ЗАРАНЕЕ.<br><br>

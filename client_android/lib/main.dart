@@ -428,8 +428,8 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
             children: [
               Text(
                 _locale == 'ru'
-                    ? 'Вышла новая версия RaveStreamer v$version.\nНажмите «Авто-установка» для скачивания внутри приложения!'
-                    : 'A new version of RaveStreamer v$version is available.\nTap "Auto-Install" for direct in-app download!',
+                    ? 'Вышла новая версия Luna v$version.\nНажмите «Авто-установка» для скачивания внутри приложения!'
+                    : 'A new version of Luna v$version is available.\nTap "Auto-Install" for direct in-app download!',
                 style: const TextStyle(color: Colors.white70, fontSize: 13),
               ),
               const SizedBox(height: 12),
@@ -1167,8 +1167,8 @@ class _ConnectionPageState extends State<ConnectionPage> {
             children: [
               Text(
                 widget.locale == 'ru'
-                    ? 'Вышла новая версия RaveStreamer v$version.\nНажмите «Авто-установка» для скачивания внутри приложения!'
-                    : 'A new version of RaveStreamer v$version is available.\nTap "Auto-Install" for direct in-app download!',
+                    ? 'Вышла новая версия Luna v$version.\nНажмите «Авто-установка» для скачивания внутри приложения!'
+                    : 'A new version of Luna v$version is available.\nTap "Auto-Install" for direct in-app download!',
                 style: const TextStyle(color: Colors.white70, fontSize: 13),
               ),
               const SizedBox(height: 12),
