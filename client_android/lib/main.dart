@@ -3291,8 +3291,6 @@ class _RoomPageState extends State<RoomPage> {
   Widget _buildVideoControlsOverlay() {
     if (_mkPlayer == null) return const SizedBox.shrink();
 
-    final isMeHost = _users.isNotEmpty && _users[0]['id'] == _socket.id;
-
     final position = _mkPlayer!.state.position;
     final duration = _mkPlayer!.state.duration;
     final isPlaying = _mkPlayer!.state.playing;
