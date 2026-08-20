@@ -16,7 +16,6 @@ import 'package:youtube_explode_dart/youtube_explode_dart.dart' hide Video;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'webrtc_manager.dart';
-import 'screen_picker.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart' hide Webview;
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:path_provider/path_provider.dart';
@@ -3511,6 +3510,8 @@ class _RoomPageState extends State<RoomPage> {
   Widget _buildVideoControlsOverlay() {
     if (_mkPlayer == null) return const SizedBox.shrink();
 
+    final isMeHost = _users.isNotEmpty && _users[0]['id'] == _socket.id;
+
     final position = _mkPlayer!.state.position;
     final duration = _mkPlayer!.state.duration;
     final isPlaying = _mkPlayer!.state.playing;
@@ -3864,14 +3865,14 @@ class _RoomPageState extends State<RoomPage> {
           ),
           const SizedBox(height: 10),
           
-          // Streaming Buttons (Windows Host Only)
+          // Tab Streaming Button (Windows Host Only)
           if (Platform.isWindows && isMeHost) ...[
             _buildCard(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(
-                    _locale == 'ru' ? 'Стриминг (WebRTC / Вкладка)' : 'Streaming (WebRTC / Tab)',
+                    _locale == 'ru' ? 'Трансляция из вкладки' : 'Stream Browser Tab',
                     style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 8),
@@ -3879,7 +3880,6 @@ class _RoomPageState extends State<RoomPage> {
                     ElevatedButton.icon(
                       onPressed: () {
                         _socket.emit('stop-stream', {'roomId': widget.roomId});
-                        _webrtcManager?.stopScreenShare();
                         try { _localHttpServer?.close(force: true); } catch (_) {}
                         _localHttpServer = null;
                         if (mounted) {
@@ -3891,7 +3891,7 @@ class _RoomPageState extends State<RoomPage> {
                       },
                       icon: const Icon(Icons.stop_screen_share, size: 18),
                       label: Text(
-                        _locale == 'ru' ? 'Остановить стрим' : 'Stop Stream',
+                        _locale == 'ru' ? 'Остановить трансляцию' : 'Stop Stream',
                         style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
                       ),
                       style: ElevatedButton.styleFrom(
@@ -3900,41 +3900,7 @@ class _RoomPageState extends State<RoomPage> {
                         padding: const EdgeInsets.symmetric(vertical: 12),
                       ),
                     )
-                  else ...[
-                    ElevatedButton.icon(
-                      onPressed: () {
-                        showDialog(
-                          context: context,
-                          builder: (ctx) => Dialog(
-                            backgroundColor: Colors.transparent,
-                            child: ScreenPickerWidget(
-                              onSourceSelected: (sourceId, fps, res) {
-                                Navigator.pop(ctx);
-                                setState(() { _isLiveStreaming = true; });
-                                _socket.emit('start-stream', {'roomId': widget.roomId});
-                                _webrtcManager?.startScreenShare(
-                                  sourceId: sourceId,
-                                  fps: fps,
-                                  height: res,
-                                  width: res == 1080 ? 1920 : (res == 720 ? 1280 : 854),
-                                );
-                              }
-                            ),
-                          ),
-                        );
-                      },
-                      icon: const Icon(Icons.screen_share, size: 18),
-                      label: Text(
-                        _locale == 'ru' ? 'Начать стрим экрана' : 'Share Screen',
-                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
-                      ),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF00F2FE),
-                        foregroundColor: Colors.black,
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
+                  else
                     ElevatedButton.icon(
                       onPressed: () {
                         setState(() { _isLiveStreaming = true; });
@@ -3943,7 +3909,7 @@ class _RoomPageState extends State<RoomPage> {
                       },
                       icon: const Icon(Icons.tab, size: 18),
                       label: Text(
-                        _locale == 'ru' ? 'Трансляция из вкладки' : 'Start Tab Stream',
+                        _locale == 'ru' ? 'Запустить трансляцию из вкладки' : 'Start Tab Stream',
                         style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
                       ),
                       style: ElevatedButton.styleFrom(
@@ -3952,7 +3918,6 @@ class _RoomPageState extends State<RoomPage> {
                         padding: const EdgeInsets.symmetric(vertical: 12),
                       ),
                     ),
-                  ],
                 ],
               ),
             ),
