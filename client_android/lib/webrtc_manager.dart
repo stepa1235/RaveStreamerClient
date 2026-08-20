@@ -12,6 +12,7 @@ class WebRTCManager {
   MediaStream? localStream;
   RTCVideoRenderer localRenderer = RTCVideoRenderer();
   RTCVideoRenderer remoteRenderer = RTCVideoRenderer();
+  bool isPeerConnected = false;
   
   // Map of viewer Socket ID -> RTCPeerConnection
   final Map<String, RTCPeerConnection> peerConnections = {};
@@ -143,12 +144,12 @@ class WebRTCManager {
 
   Future<void> _handleOffer(dynamic data) async {
     try {
-      if (isHostResolver()) {
-        debugPrint('Host received webrtc-offer, ignoring to prevent self-echo.');
+      final senderId = data['senderId'];
+      if (senderId == socket.id) {
+        debugPrint('Received webrtc-offer from self, ignoring.');
         return;
       }
       
-      final senderId = data['senderId'];
       final offerData = data['offer'];
       
       final pc = await createPeerConnection(configuration);
@@ -162,6 +163,18 @@ class WebRTCManager {
           'candidate': candidate.toMap(),
           'roomId': roomId
         });
+      };
+
+      pc.onIceConnectionState = (state) {
+        debugPrint('ICE connection state with $senderId: $state');
+        if (state == RTCIceConnectionState.RTCIceConnectionStateConnected ||
+            state == RTCIceConnectionState.RTCIceConnectionStateCompleted) {
+          isPeerConnected = true;
+        } else if (state == RTCIceConnectionState.RTCIceConnectionStateFailed ||
+                   state == RTCIceConnectionState.RTCIceConnectionStateDisconnected ||
+                   state == RTCIceConnectionState.RTCIceConnectionStateClosed) {
+          isPeerConnected = false;
+        }
       };
 
       pc.onAddStream = (stream) {

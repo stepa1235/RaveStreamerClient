@@ -10,6 +10,7 @@ class WebRTCManager {
   MediaStream? localStream;
   RTCVideoRenderer localRenderer = RTCVideoRenderer();
   RTCVideoRenderer remoteRenderer = RTCVideoRenderer();
+  bool isPeerConnected = false;
   
   // Map of viewer Socket ID -> RTCPeerConnection
   final Map<String, RTCPeerConnection> peerConnections = {};
@@ -26,6 +27,7 @@ class WebRTCManager {
 
   Function()? onStreamStarted;
   Function()? onStreamStopped;
+  Function()? onRenderUpdated;
   Function(String)? onError;
 
   WebRTCManager({
@@ -37,6 +39,9 @@ class WebRTCManager {
   Future<void> initialize() async {
     await localRenderer.initialize();
     await remoteRenderer.initialize();
+    remoteRenderer.onResize = () {
+      onRenderUpdated?.call();
+    };
 
     // Listen to signaling events
     socket.on('webrtc-offer', _handleOffer);
@@ -96,6 +101,7 @@ class WebRTCManager {
     localStream?.getTracks().forEach((track) => track.stop());
     localStream = null;
     localRenderer.srcObject = null;
+    isPeerConnected = false;
     
     for (var pc in peerConnections.values) {
       pc.close();
@@ -136,12 +142,12 @@ class WebRTCManager {
   // --- VIEWER SPECIFIC ---
 
   Future<void> _handleOffer(dynamic data) async {
-    if (isHostResolver()) {
-      debugPrint('Host received webrtc-offer, ignoring to prevent self-echo.');
+    final senderId = data['senderId'];
+    if (senderId == socket.id) {
+      debugPrint('Received webrtc-offer from self, ignoring.');
       return;
     }
     
-    final senderId = data['senderId'];
     final offerData = data['offer'];
     
     final pc = await createPeerConnection(configuration);
@@ -155,25 +161,40 @@ class WebRTCManager {
       });
     };
 
-      pc.onAddStream = (stream) {
-        remoteRenderer.srcObject = stream;
-        onStreamStarted?.call();
-      };
+    pc.onIceConnectionState = (state) {
+      debugPrint('ICE connection state with $senderId: $state');
+      if (state == RTCIceConnectionState.RTCIceConnectionStateConnected ||
+          state == RTCIceConnectionState.RTCIceConnectionStateCompleted) {
+        isPeerConnected = true;
+      } else if (state == RTCIceConnectionState.RTCIceConnectionStateFailed ||
+                 state == RTCIceConnectionState.RTCIceConnectionStateDisconnected ||
+                 state == RTCIceConnectionState.RTCIceConnectionStateClosed) {
+        isPeerConnected = false;
+      }
+      onRenderUpdated?.call();
+    };
 
-      pc.onTrack = (event) async {
-        debugPrint('Got remote track: ${event.track.kind}, streams: ${event.streams.length}');
-        if (event.streams.isNotEmpty) {
-          remoteRenderer.srcObject = event.streams[0];
-        } else {
-          try {
-            remoteRenderer.srcObject ??= await createLocalMediaStream('remote_stream_${DateTime.now().millisecondsSinceEpoch}');
-            remoteRenderer.srcObject!.addTrack(event.track);
-          } catch (e) {
-            debugPrint('Failed to add track to remote stream: $e');
-          }
+    pc.onAddStream = (stream) {
+      remoteRenderer.srcObject = stream;
+      onStreamStarted?.call();
+      onRenderUpdated?.call();
+    };
+
+    pc.onTrack = (event) async {
+      debugPrint('Got remote track: ${event.track.kind}, streams: ${event.streams.length}');
+      if (event.streams.isNotEmpty) {
+        remoteRenderer.srcObject = event.streams[0];
+      } else {
+        try {
+          remoteRenderer.srcObject ??= await createLocalMediaStream('remote_stream_${DateTime.now().millisecondsSinceEpoch}');
+          remoteRenderer.srcObject!.addTrack(event.track);
+        } catch (e) {
+          debugPrint('Failed to add track to remote stream: $e');
         }
-        onStreamStarted?.call();
-      };
+      }
+      onStreamStarted?.call();
+      onRenderUpdated?.call();
+    };
 
     await pc.setRemoteDescription(RTCSessionDescription(offerData['sdp'], offerData['type']));
     
@@ -245,6 +266,7 @@ class WebRTCManager {
     socket.off('webrtc-answer');
     socket.off('webrtc-ice-candidate');
     
+    isPeerConnected = false;
     localStream?.getTracks().forEach((t) => t.stop());
     localRenderer.dispose();
     remoteRenderer.dispose();

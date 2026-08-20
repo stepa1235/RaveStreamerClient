@@ -311,26 +311,30 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
       if (response.statusCode == 200) {
         final jsonData = jsonDecode(response.body) as Map<String, dynamic>;
         if (jsonData.containsKey('url')) {
-          final freshUrl = jsonData['url'] as String;
-          debugPrint('Fetched server URL from Gist: $freshUrl');
-          setState(() {
-            _savedServerUrl = freshUrl;
-          });
+          final freshUrl = (jsonData['url'] as String).trim();
+          bool isAlive = false;
+          try {
+            final hRes = await http.get(Uri.parse('$freshUrl/health'), headers: {'bypass-tunnel-reminder': 'true'}).timeout(const Duration(seconds: 2));
+            if (hRes.statusCode == 200) isAlive = true;
+          } catch (_) {}
 
-          // Check for app updates
+          if (isAlive) {
+            debugPrint('Fetched server URL from Gist: $freshUrl');
+            setState(() {
+              _savedServerUrl = freshUrl;
+            });
+            await saveSettings({
+              'locale': _locale,
+              'themeName': _themeName,
+              'chatFontSize': _chatFontSize,
+              'username': _savedUsername,
+              'serverUrl': freshUrl,
+            });
+          }
           if (jsonData.containsKey('latest_version')) {
             _checkForUpdates(jsonData);
             updateChecked = true;
           }
-
-          // Persist so it works offline next time
-          await saveSettings({
-            'locale': _locale,
-            'themeName': _themeName,
-            'chatFontSize': _chatFontSize,
-            'username': _savedUsername,
-            'serverUrl': freshUrl,
-          });
         }
       }
     } catch (e) {
@@ -812,26 +816,39 @@ class _ConnectionPageState extends State<ConnectionPage> {
 
     String serverUrl = _serverController.text.trim();
 
-    // Re-fetch Gist URL right when clicking to guarantee the freshest address is used
-    try {
-      final gistRawUrl =
-          'https://gist.githubusercontent.com/stepa1235/0811a2ec6e74b06965de32f61643da5b/raw/ravestreamer.json?t=${DateTime.now().millisecondsSinceEpoch}';
-      var response = await http.get(Uri.parse('https://api.github.com/gists/0811a2ec6e74b06965de32f61643da5b'), headers: {'Cache-Control': 'no-cache'}).timeout(const Duration(seconds: 4));
+    if (serverUrl.isEmpty || serverUrl.contains('loca.lt')) {
+      try {
+        final gistRawUrl =
+            'https://gist.githubusercontent.com/stepa1235/0811a2ec6e74b06965de32f61643da5b/raw/ravestreamer.json?t=${DateTime.now().millisecondsSinceEpoch}';
+        var response = await http.get(Uri.parse('https://api.github.com/gists/0811a2ec6e74b06965de32f61643da5b'), headers: {'Cache-Control': 'no-cache'}).timeout(const Duration(seconds: 2));
         if (response.statusCode == 200) {
           final jsonApi = jsonDecode(response.body) as Map<String, dynamic>;
           response = http.Response(jsonApi['files']['ravestreamer.json']['content'], 200);
         } else {
-          response = await http.get(Uri.parse(gistRawUrl)).timeout(const Duration(seconds: 4));
+          response = await http.get(Uri.parse(gistRawUrl)).timeout(const Duration(seconds: 2));
         }
-      if (response.statusCode == 200) {
-        final jsonData = jsonDecode(response.body) as Map<String, dynamic>;
-        if (jsonData.containsKey('url')) {
-          serverUrl = jsonData['url'] as String;
-          _serverController.text = serverUrl;
+        if (response.statusCode == 200) {
+          final jsonData = jsonDecode(response.body) as Map<String, dynamic>;
+          if (jsonData.containsKey('url')) {
+            final fetchedUrl = (jsonData['url'] as String).trim();
+            try {
+              final healthUri = Uri.parse('$fetchedUrl/health');
+              final healthResp = await http.get(healthUri, headers: {'bypass-tunnel-reminder': 'true'}).timeout(const Duration(seconds: 2));
+              if (healthResp.statusCode == 200) {
+                serverUrl = fetchedUrl;
+                _serverController.text = serverUrl;
+              }
+            } catch (_) {}
+          }
         }
+      } catch (e) {
+        debugPrint('Could not refresh Gist URL: $e');
       }
-    } catch (e) {
-      debugPrint('Could not refresh Gist URL, using cached URL: $e');
+    }
+
+    if (serverUrl.isEmpty) {
+      serverUrl = 'http://127.0.0.1:3000';
+      _serverController.text = serverUrl;
     }
 
     // Save connection settings immediately so nickname persists
@@ -1713,6 +1730,7 @@ class _RoomPageState extends State<RoomPage> {
   bool _playerReady = false; // becomes true once player is initialized
 
   bool _isLiveStreaming = false;
+  Uint8List? _currentLiveFrame;
 
   // App states
   bool _isConnected = false;
@@ -1785,8 +1803,8 @@ class _RoomPageState extends State<RoomPage> {
       _sendPeriodicSync();
     });
 
-    // Connection timeout check (90 seconds for server wakeup)
-    Timer(const Duration(seconds: 90), () {
+    // Connection timeout check (15 seconds for server wakeup)
+    Timer(const Duration(seconds: 15), () {
       if (mounted && !_hasJoinedRoom) {
         showDialog(
           context: context,
@@ -1815,6 +1833,11 @@ class _RoomPageState extends State<RoomPage> {
                 onPressed: () {
                   Navigator.pop(ctx);
                   _socket.connect();
+                  _socket.emit('join-room', {
+                    'roomId': widget.roomId,
+                    'username': widget.username,
+                    if (widget.password != null && widget.password!.isNotEmpty) 'password': widget.password,
+                  });
                 },
                 child: Text(_locale == 'ru' ? 'Повторить' : 'Retry', style: const TextStyle(color: Color(0xFF00F2FE))),
               ),
@@ -1825,6 +1848,12 @@ class _RoomPageState extends State<RoomPage> {
                   if (mounted) {
                     setState(() {
                       _hasJoinedRoom = true;
+                    });
+                    _socket.connect();
+                    _socket.emit('join-room', {
+                      'roomId': widget.roomId,
+                      'username': widget.username,
+                      if (widget.password != null && widget.password!.isNotEmpty) 'password': widget.password,
                     });
                   }
                 },
@@ -1895,15 +1924,12 @@ class _RoomPageState extends State<RoomPage> {
     };
 
     _socket = IO.io(widget.serverUrl, IO.OptionBuilder()
-      .setTransports(['websocket'])
+      .setTransports(['polling', 'websocket'])
       .disableAutoConnect()
       .setExtraHeaders({'bypass-tunnel-reminder': 'true'})
+      .setQuery({'bypass-tunnel-reminder': 'true'})
       .build()
     );
-
-
-
-    _socket.connect();
 
     _socket.onConnect((_) {
       if (_isDisposed || !mounted) return;
@@ -2066,14 +2092,11 @@ class _RoomPageState extends State<RoomPage> {
 
       final isHost = _users.isNotEmpty && _users[0]['id'] == _socket.id;
       if (isLive) {
-        if (isHost) {
-          try { _mkPlayer?.setVolume(0); } catch (_) {}
-        } else {
-          final serverBase = widget.serverUrl.replaceAll('wss://', 'https://').replaceAll('ws://', 'http://');
-          final streamUrl = '$serverBase/live-stream/${widget.roomId}';
-          _setupVideoPlayer(streamUrl, 'Live Stream', startPlaying: true);
-          _socket.emit('new-viewer', {'roomId': widget.roomId, 'viewerId': _socket.id});
-        }
+        setState(() {
+          _isLiveStreaming = true;
+          _currentLiveFrame = null;
+        });
+        _triggerControlsVisibility();
       } else if (videoUrl.isNotEmpty) {
         _setupVideoPlayer(videoUrl, videoName, startPlaying: isPlaying, startSeconds: calculatedTime, headers: headers);
       }
@@ -2081,17 +2104,9 @@ class _RoomPageState extends State<RoomPage> {
 
     _socket.on('stream-started', (_) {
       if (mounted) {
-        final isHost = _users.isNotEmpty && _users[0]['id'] == _socket.id;
-        if (isHost) {
-          try { _mkPlayer?.setVolume(0); } catch (_) {}
-        } else {
-          final serverBase = widget.serverUrl.replaceAll('wss://', 'https://').replaceAll('ws://', 'http://');
-          final streamUrl = '$serverBase/live-stream/${widget.roomId}';
-          _setupVideoPlayer(streamUrl, 'Live Stream', startPlaying: true);
-          _socket.emit('new-viewer', {'roomId': widget.roomId, 'viewerId': _socket.id});
-        }
         setState(() {
           _isLiveStreaming = true;
+          _currentLiveFrame = null;
         });
         _triggerControlsVisibility();
       }
@@ -2119,11 +2134,30 @@ class _RoomPageState extends State<RoomPage> {
       if (mounted) {
         setState(() {
           _isLiveStreaming = false;
+          _currentLiveFrame = null;
         });
         try { _mkPlayer?.setVolume(100); } catch (_) {}
         try { _mkPlayer?.open(Media('')); } catch (_) {}
         try { _mkPlayer?.pause(); } catch (_) {}
       }
+    });
+
+    _socket.on('live-frame', (data) {
+      if (!mounted) return;
+      try {
+        Uint8List? bytes;
+        if (data is Uint8List) {
+          bytes = data;
+        } else if (data is List) {
+          bytes = Uint8List.fromList(data.cast<int>());
+        }
+        if (bytes != null && bytes.isNotEmpty) {
+          setState(() {
+            _currentLiveFrame = bytes;
+            _isLiveStreaming = true;
+          });
+        }
+      } catch (_) {}
     });
 
     // Handle video change event
@@ -2259,6 +2293,30 @@ class _RoomPageState extends State<RoomPage> {
       _socket.disconnect();
       /* SnackBar disabled */
       Navigator.of(context).pop(); // Go back to connection page
+    });
+
+    // Connect AFTER all event handlers are registered
+    _socket.connect();
+    if (_socket.connected) {
+      _socket.emit('join-room', {
+        'roomId': widget.roomId,
+        'username': widget.username,
+        if (widget.password != null && widget.password!.isNotEmpty) 'password': widget.password,
+      });
+    }
+
+    // Auto-retry join-room after 3s if server response is slow
+    Timer(const Duration(seconds: 3), () {
+      if (mounted && !_hasJoinedRoom) {
+        if (!_socket.connected) {
+          _socket.connect();
+        }
+        _socket.emit('join-room', {
+          'roomId': widget.roomId,
+          'username': widget.username,
+          if (widget.password != null && widget.password!.isNotEmpty) 'password': widget.password,
+        });
+      }
     });
   }
 
@@ -3166,12 +3224,21 @@ class _RoomPageState extends State<RoomPage> {
                       fit: StackFit.expand,
                       children: [
                         if (_playerReady && _mkPlayer != null && _mkPlayer!.isInitialized)
-                          WebViewWidget(controller: _mkPlayer!.controller)
+                          Offstage(
+                            offstage: _isLiveStreaming && _currentLiveFrame != null,
+                            child: WebViewWidget(controller: _mkPlayer!.controller),
+                          )
                         else
                           const Center(
                             child: CircularProgressIndicator(
                               valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF6C63FF)),
                             ),
+                          ),
+                        if (_isLiveStreaming && _currentLiveFrame != null)
+                          Image.memory(
+                            _currentLiveFrame!,
+                            fit: BoxFit.contain,
+                            gaplessPlayback: true,
                           ),
                         AnimatedOpacity(
                           opacity: _showControls ? 1.0 : 0.0,
@@ -3297,79 +3364,52 @@ class _RoomPageState extends State<RoomPage> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   // Progress Slider / LIVE badge
-                  _isLiveStreaming
-                      ? Align(
-                          alignment: Alignment.centerLeft,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                            decoration: BoxDecoration(
-                              color: Colors.red.withOpacity(0.2),
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: Colors.redAccent, width: 1),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: const [
-                                Icon(Icons.circle, color: Colors.redAccent, size: 6),
-                                SizedBox(width: 4),
-                                Text(
-                                  'ПРЯМОЙ ЭФИР',
-                                  style: TextStyle(
-                                    color: Colors.redAccent,
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.bold,
-                                    letterSpacing: 0.5,
+                  if (!_isLiveStreaming)
+                    Row(
+                      children: [
+                        Text(
+                          formatDuration(position),
+                          style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: isMeHost
+                              ? SliderTheme(
+                                  data: SliderTheme.of(context).copyWith(
+                                    activeTrackColor: const Color(0xFF00F2FE),
+                                    inactiveTrackColor: Colors.white24,
+                                    thumbColor: const Color(0xFF6C63FF),
+                                    trackHeight: 4,
+                                    thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                                  ),
+                                  child: Slider(
+                                    min: 0.0,
+                                    max: duration.inMilliseconds > 0 
+                                      ? duration.inMilliseconds / 1000.0 
+                                      : 100.0,
+                                    value: (position.inMilliseconds / 1000.0).clamp(0.0, duration.inMilliseconds > 0 ? duration.inMilliseconds / 1000.0 : 100.0),
+                                    onChanged: (val) {
+                                      _localSeek(val);
+                                    },
+                                  ),
+                                )
+                              : ClipRRect(
+                                  borderRadius: BorderRadius.circular(4),
+                                  child: LinearProgressIndicator(
+                                    value: duration.inMilliseconds > 0 ? position.inMilliseconds / duration.inMilliseconds : 0.0,
+                                    backgroundColor: Colors.white12,
+                                    valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF00F2FE)),
+                                    minHeight: 4,
                                   ),
                                 ),
-                              ],
-                            ),
-                          ),
-                        )
-                      : Row(
-                    children: [
-                      Text(
-                        formatDuration(position),
-                        style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: isMeHost
-                            ? SliderTheme(
-                                data: SliderTheme.of(context).copyWith(
-                                  activeTrackColor: const Color(0xFF00F2FE),
-                                  inactiveTrackColor: Colors.white24,
-                                  thumbColor: const Color(0xFF6C63FF),
-                                  trackHeight: 4,
-                                  thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-                                ),
-                                child: Slider(
-                                  min: 0.0,
-                                  max: duration.inMilliseconds > 0 
-                                    ? duration.inMilliseconds / 1000.0 
-                                    : 100.0,
-                                  value: (position.inMilliseconds / 1000.0).clamp(0.0, duration.inMilliseconds > 0 ? duration.inMilliseconds / 1000.0 : 100.0),
-                                  onChanged: (val) {
-                                    _localSeek(val);
-                                  },
-                                ),
-                              )
-                            : ClipRRect(
-                                borderRadius: BorderRadius.circular(4),
-                                child: LinearProgressIndicator(
-                                  value: duration.inMilliseconds > 0 ? position.inMilliseconds / duration.inMilliseconds : 0.0,
-                                  backgroundColor: Colors.white12,
-                                  valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF00F2FE)),
-                                  minHeight: 4,
-                                ),
-                              ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        formatDuration(duration),
-                        style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
-                      ),
-                    ],
-                  ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          formatDuration(duration),
+                          style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                        ),
+                      ],
+                    ),
                   // Button Bar
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -3378,7 +3418,40 @@ class _RoomPageState extends State<RoomPage> {
                       Expanded(
                         child: Row(
                           children: [
-                            if (isMeHost) ...[
+                            if (_isLiveStreaming)
+                              Container(
+                                margin: const EdgeInsets.only(right: 12),
+                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: const Color(0x33E53935),
+                                  borderRadius: BorderRadius.circular(20),
+                                  border: Border.all(color: const Color(0xFFEF5350), width: 1.5),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: const Color(0xFFEF5350).withOpacity(0.3),
+                                      blurRadius: 8,
+                                      spreadRadius: 1,
+                                    )
+                                  ],
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: const [
+                                    Icon(Icons.circle, color: Color(0xFFEF5350), size: 10),
+                                    SizedBox(width: 6),
+                                    Text(
+                                      'ПРЯМОЙ ЭФИР',
+                                      style: TextStyle(
+                                        color: Color(0xFFEF5350),
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.bold,
+                                        letterSpacing: 1.0,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              )
+                            else if (isMeHost) ...[
                               IconButton(
                                 iconSize: 42,
                                 color: Colors.white,
@@ -3646,8 +3719,8 @@ class _RoomPageState extends State<RoomPage> {
                 const SizedBox(height: 4),
                 Text(
                   _locale == 'ru' 
-                      ? 'Поддерживает VK, Rutube, прямые ссылки и плееры (api.collaps.to, alloha.tv)' 
-                      : 'Supports VK, Rutube, direct video files and embeds (api.collaps.to, alloha.tv)',
+                      ? 'Поддерживает VK, Rutube, YouTube, прямые ссылки и плееры (api.collaps.to, alloha.tv)' 
+                      : 'Supports VK, Rutube, YouTube, direct video files and embeds (api.collaps.to, alloha.tv)',
                   style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 10),
                 ),
                 const SizedBox(height: 8),
@@ -5112,7 +5185,7 @@ class WebviewPlayer {
       final isHttp = playUrl.startsWith('http') || playUrl.startsWith('https');
       if (!isHttp) {
         playUrl = 'http://127.0.0.1:$_localPort/file?path=${Uri.encodeComponent(playUrl)}';
-      } else if (playUrl.contains('/live-stream/') || playUrl.contains('/proxy/')) {
+      } else if (playUrl.contains('/proxy/')) {
         playUrl = 'http://127.0.0.1:$_localPort/proxy?url=${Uri.encodeComponent(playUrl)}';
       }
 

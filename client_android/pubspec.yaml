@@ -49,6 +49,7 @@ dependencies:
   path_provider: ^2.1.5
   package_info_plus: ^8.0.0
   apk_sideload: ^0.0.2
+  flutter_webrtc: ^1.6.0
 dev_dependencies:
   flutter_test:
     sdk: flutter
