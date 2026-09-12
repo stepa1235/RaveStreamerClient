@@ -416,7 +416,7 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
   String _themeName = 'Dark';
   double _chatFontSize = 12.0;
   String _savedUsername = '';
-  String _savedServerUrl = '';
+  String _savedServerUrl = 'http://luna.lumigrid.ru:3000';
   bool _isLoading = true;
   
   // Unique client ID generated in memory at app startup to resolve localhost username collision
@@ -438,23 +438,31 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
           _chatFontSize = (data['chatFontSize'] as num).toDouble();
         }
         if (data.containsKey('username')) _savedUsername = data['username'] as String;
+        if (data.containsKey('serverUrl')) {
+          final sUrl = (data['serverUrl'] as String).trim();
+          if (sUrl.isNotEmpty && !sUrl.contains('loca.lt') && !sUrl.contains('onrender.com')) {
+            _savedServerUrl = sUrl;
+          } else {
+            _savedServerUrl = 'http://luna.lumigrid.ru:3000';
+          }
+        }
       });
     }
 
-    // Always fetch the latest server URL from GitHub Gist
-    await _fetchServerUrlFromGist();
+    // Check for updates directly from GitHub Releases API
+    _checkAppUpdates();
 
     setState(() {
       _isLoading = false;
     });
   }
 
-  Future<void> _fetchServerUrlFromGist() async {
+  Future<void> _checkAppUpdates() async {
     try {
       final releaseRes = await http.get(
         Uri.parse('https://api.github.com/repos/stepa1235/RaveStreamerClient/releases/latest'),
         headers: {
-          'User-Agent': 'RaveStreamerApp/1.0',
+          'User-Agent': 'LunaClient/1.0',
           'Accept': 'application/vnd.github.v3+json',
           'Cache-Control': 'no-cache',
         },
@@ -465,64 +473,23 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
         final tagName = (releaseData['tag_name'] as String? ?? '').replaceAll('v', '');
         final assets = (releaseData['assets'] as List<dynamic>? ?? []);
         
-        String apkUrl = '';
         String winUrl = '';
         for (var asset in assets) {
           final name = asset['name'] as String? ?? '';
           final url = asset['browser_download_url'] as String? ?? '';
-          if (name.endsWith('.apk')) apkUrl = url;
           if (name.endsWith('.zip')) winUrl = url;
         }
 
         if (tagName.isNotEmpty) {
           final jsonData = {
             'latest_version': tagName,
-            'android_url': apkUrl.isNotEmpty ? apkUrl : 'https://github.com/stepa1235/RaveStreamerClient/releases/latest/download/RaveStreamer.apk',
-            'windows_url': winUrl.isNotEmpty ? winUrl : 'https://github.com/stepa1235/RaveStreamerClient/releases/latest/download/RaveStreamer-Windows.zip',
+            'windows_url': winUrl.isNotEmpty ? winUrl : 'https://github.com/stepa1235/RaveStreamerClient/releases/latest/download/Luna-Windows.zip',
           };
           _checkForUpdates(jsonData);
         }
       }
     } catch (e) {
       debugPrint('GitHub Releases API update check error: $e');
-    }
-
-    final gistRawUrl =
-        'https://gist.githubusercontent.com/stepa1235/0811a2ec6e74b06965de32f61643da5b/raw/ravestreamer.json?t=${DateTime.now().millisecondsSinceEpoch}';
-    try {
-      final response = await http.get(Uri.parse(gistRawUrl)).timeout(const Duration(seconds: 5));
-      if (response.statusCode == 200) {
-        final jsonData = jsonDecode(response.body) as Map<String, dynamic>;
-        if (jsonData.containsKey('url')) {
-          final freshUrl = jsonData['url'] as String;
-          debugPrint('Fetched server URL from Gist: $freshUrl');
-          setState(() {
-            _savedServerUrl = freshUrl;
-          });
-
-          // Check for app updates
-          _checkForUpdates(jsonData);
-
-          // Persist so it works offline next time
-          await saveSettings({
-            'locale': _locale,
-            'themeName': _themeName,
-            'chatFontSize': _chatFontSize,
-            'username': _savedUsername,
-            'serverUrl': freshUrl,
-          });
-          return;
-        }
-      }
-    } catch (e) {
-      debugPrint('Could not fetch Gist, using saved URL: $e');
-    }
-    // Fallback to saved URL from settings
-    final data = await loadSettings();
-    if (data.containsKey('serverUrl')) {
-      setState(() {
-        _savedServerUrl = data['serverUrl'] as String;
-      });
     }
   }
 
@@ -734,8 +701,13 @@ class _ConnectionPageState extends State<ConnectionPage> {
   @override
   void initState() {
     super.initState();
+    final initialUrl = widget.initialServerUrl.isNotEmpty && 
+        !widget.initialServerUrl.contains('loca.lt') && 
+        !widget.initialServerUrl.contains('onrender.com')
+        ? widget.initialServerUrl 
+        : 'http://luna.lumigrid.ru:3000';
     _serverController = TextEditingController(
-      text: widget.initialServerUrl.isNotEmpty ? widget.initialServerUrl : 'http://195.133.26.226:3000',
+      text: initialUrl,
     );
     _usernameController = TextEditingController(
       text: widget.initialUsername.isNotEmpty ? widget.initialUsername : 'User_${(1000 + (DateTime.now().millisecond % 9000))}',
@@ -772,34 +744,8 @@ class _ConnectionPageState extends State<ConnectionPage> {
     });
 
     String serverUrl = _serverController.text.trim();
-
-    // Re-fetch Gist URL right when clicking if current serverUrl is empty or default localtunnel
-    if (serverUrl.isEmpty || serverUrl.contains('loca.lt')) {
-      try {
-        final gistRawUrl =
-            'https://gist.githubusercontent.com/stepa1235/0811a2ec6e74b06965de32f61643da5b/raw/ravestreamer.json?t=${DateTime.now().millisecondsSinceEpoch}';
-        final response = await http.get(Uri.parse(gistRawUrl)).timeout(const Duration(seconds: 2));
-        if (response.statusCode == 200) {
-          final jsonData = jsonDecode(response.body) as Map<String, dynamic>;
-          if (jsonData.containsKey('url')) {
-            final fetchedUrl = (jsonData['url'] as String).trim();
-            try {
-              final healthUri = Uri.parse('$fetchedUrl/health');
-              final healthResp = await http.get(healthUri, headers: {'bypass-tunnel-reminder': 'true'}).timeout(const Duration(seconds: 2));
-              if (healthResp.statusCode == 200) {
-                serverUrl = fetchedUrl;
-                _serverController.text = serverUrl;
-              }
-            } catch (_) {}
-          }
-        }
-      } catch (e) {
-        debugPrint('Could not refresh Gist URL: $e');
-      }
-    }
-
-    if (serverUrl.isEmpty) {
-      serverUrl = 'http://127.0.0.1:3000';
+    if (serverUrl.isEmpty || serverUrl.contains('loca.lt') || serverUrl.contains('onrender.com')) {
+      serverUrl = 'http://luna.lumigrid.ru:3000';
       _serverController.text = serverUrl;
     }
 
@@ -4530,20 +4476,14 @@ class _RoomPageState extends State<RoomPage> {
                         onPressed: isCheckingUpdates ? null : () async {
                           setLocalState(() => isCheckingUpdates = true);
                           try {
-                          final gistRawUrl =
-                              'https://gist.githubusercontent.com/stepa1235/0811a2ec6e74b06965de32f61643da5b/raw/ravestreamer.json?t=${DateTime.now().millisecondsSinceEpoch}';
-                          final response = await http.get(Uri.parse(gistRawUrl)).timeout(const Duration(seconds: 8));
-                          if (response.statusCode == 200) {
-                            final jsonData = jsonDecode(response.body) as Map<String, dynamic>;
-                            final latestVersion = jsonData['latest_version'] as String? ?? '';
-                            final currentVersion = globalAppVersion;
-                            if (latestVersion.isNotEmpty && isNewerVersion(latestVersion, currentVersion)) {
-                              String downloadUrl = '';
-                              if (Platform.isAndroid) {
-                                downloadUrl = jsonData['android_url'] as String? ?? '';
-                              } else if (Platform.isWindows) {
-                                downloadUrl = jsonData['windows_url'] as String? ?? '';
-                              }
+                            final verUrl = 'http://luna.lumigrid.ru:3000/version';
+                            final response = await http.get(Uri.parse(verUrl)).timeout(const Duration(seconds: 5));
+                            if (response.statusCode == 200) {
+                              final jsonData = jsonDecode(response.body) as Map<String, dynamic>;
+                              final latestVersion = jsonData['latest_version'] as String? ?? '';
+                              final currentVersion = globalAppVersion;
+                              if (latestVersion.isNotEmpty && isNewerVersion(latestVersion, currentVersion)) {
+                                String downloadUrl = jsonData['windows_url'] as String? ?? '';
                               if (!mounted) return;
                               showDialog(
                                 context: context,
