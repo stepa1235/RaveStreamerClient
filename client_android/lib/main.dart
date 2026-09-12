@@ -766,8 +766,13 @@ class _ConnectionPageState extends State<ConnectionPage> {
   void initState() {
     super.initState();
     _requestInstallPermissionOnStartup();
+    final initialUrl = widget.initialServerUrl.isNotEmpty && 
+        !widget.initialServerUrl.contains('loca.lt') && 
+        !widget.initialServerUrl.contains('onrender.com')
+        ? widget.initialServerUrl 
+        : 'http://195.133.26.226:3000';
     _serverController = TextEditingController(
-      text: widget.initialServerUrl.isNotEmpty ? widget.initialServerUrl : 'http://195.133.26.226:3000',
+      text: initialUrl,
     );
     _usernameController = TextEditingController(
       text: widget.initialUsername.isNotEmpty ? widget.initialUsername : 'User_${(1000 + (DateTime.now().millisecond % 9000))}',
@@ -815,8 +820,8 @@ class _ConnectionPageState extends State<ConnectionPage> {
     });
 
     String serverUrl = _serverController.text.trim();
-
-    if (serverUrl.isEmpty || serverUrl.contains('loca.lt')) {
+    // Re-fetch Gist URL right when clicking if current serverUrl is empty or default localtunnel/onrender
+    if (serverUrl.isEmpty || serverUrl.contains('loca.lt') || serverUrl.contains('onrender.com')) {
       try {
         final gistRawUrl =
             'https://gist.githubusercontent.com/stepa1235/0811a2ec6e74b06965de32f61643da5b/raw/ravestreamer.json?t=${DateTime.now().millisecondsSinceEpoch}';
