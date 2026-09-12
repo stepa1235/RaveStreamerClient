@@ -29,6 +29,7 @@ class WebRTCManager {
 
   Function()? onStreamStarted;
   Function()? onStreamStopped;
+  Function()? onRenderUpdated;
   Function(String)? onError;
 
   WebRTCManager({
@@ -147,13 +148,17 @@ class WebRTCManager {
 
   Future<void> _handleOffer(dynamic data) async {
     try {
-      final senderId = data['senderId'];
-      if (senderId == socket.id) {
-        debugPrint('Received webrtc-offer from self, ignoring.');
+      if (data == null || data is! Map) return;
+      final senderId = data['senderId']?.toString();
+      if (senderId == null || senderId == socket.id) {
+        debugPrint('Received webrtc-offer from self or null, ignoring.');
         return;
       }
       
       final offerData = data['offer'];
+      if (offerData == null || offerData is! Map) return;
+      final sdp = offerData['sdp']?.toString() ?? '';
+      final type = offerData['type']?.toString() ?? 'offer';
       
       final pc = await createPeerConnection(configuration);
       peerConnections[senderId] = pc;
@@ -173,10 +178,12 @@ class WebRTCManager {
         if (state == RTCIceConnectionState.RTCIceConnectionStateConnected ||
             state == RTCIceConnectionState.RTCIceConnectionStateCompleted) {
           isPeerConnected = true;
+          onRenderUpdated?.call();
         } else if (state == RTCIceConnectionState.RTCIceConnectionStateFailed ||
                    state == RTCIceConnectionState.RTCIceConnectionStateDisconnected ||
                    state == RTCIceConnectionState.RTCIceConnectionStateClosed) {
           isPeerConnected = false;
+          onRenderUpdated?.call();
         }
       };
 
@@ -186,6 +193,7 @@ class WebRTCManager {
           try { MethodChannel('com.example.client/permissions').invokeMethod('setMediaAudioMode'); } catch (_) {}
         }
         onStreamStarted?.call();
+        onRenderUpdated?.call();
       };
 
       pc.onTrack = (event) async {
@@ -206,20 +214,21 @@ class WebRTCManager {
           } catch (_) {}
         }
         onStreamStarted?.call();
+        onRenderUpdated?.call();
       };
 
-
-      await pc.setRemoteDescription(RTCSessionDescription(offerData['sdp'], offerData['type']));
+      await pc.setRemoteDescription(RTCSessionDescription(sdp, type));
       _hasRemoteDescription[senderId] = true;
       
       final queued = _iceCandidateQueue[senderId];
       if (queued != null) {
         for (var cData in queued) {
-          await pc.addCandidate(RTCIceCandidate(
-            cData['candidate'],
-            cData['sdpMid'],
-            cData['sdpMLineIndex']
-          ));
+          final cand = cData['candidate']?.toString() ?? '';
+          final sdpMid = cData['sdpMid']?.toString();
+          final sdpMLineIndex = cData['sdpMLineIndex'] is int 
+              ? cData['sdpMLineIndex'] as int 
+              : int.tryParse(cData['sdpMLineIndex']?.toString() ?? '');
+          await pc.addCandidate(RTCIceCandidate(cand, sdpMid, sdpMLineIndex));
         }
         _iceCandidateQueue.remove(senderId);
       }
@@ -238,46 +247,82 @@ class WebRTCManager {
         'roomId': roomId
       });
     } catch (e) {
-      print('Error handling WebRTC offer: $e');
+      debugPrint('Error handling WebRTC offer: $e');
     }
   }
 
   Future<void> _handleAnswer(dynamic data) async {
     try {
-      final senderId = data['senderId'];
+      if (data == null || data is! Map) return;
+      final senderId = data['senderId']?.toString();
+      if (senderId == null) return;
       final answerData = data['answer'];
+      if (answerData == null || answerData is! Map) return;
       
       final pc = peerConnections[senderId];
       if (pc != null) {
-        await pc.setRemoteDescription(RTCSessionDescription(answerData['sdp'], answerData['type']));
+        final sdp = answerData['sdp']?.toString() ?? '';
+        final type = answerData['type']?.toString() ?? 'answer';
+        await pc.setRemoteDescription(RTCSessionDescription(sdp, type));
+        _hasRemoteDescription[senderId] = true;
+        
+        final queued = _iceCandidateQueue[senderId];
+        if (queued != null) {
+          for (var cData in queued) {
+            final cand = cData['candidate']?.toString() ?? '';
+            final sdpMid = cData['sdpMid']?.toString();
+            final sdpMLineIndex = cData['sdpMLineIndex'] is int 
+                ? cData['sdpMLineIndex'] as int 
+                : int.tryParse(cData['sdpMLineIndex']?.toString() ?? '');
+            await pc.addCandidate(RTCIceCandidate(cand, sdpMid, sdpMLineIndex));
+          }
+          _iceCandidateQueue.remove(senderId);
+        }
       }
     } catch (e) {
-      print('Error handling WebRTC answer: $e');
+      debugPrint('Error handling WebRTC answer: $e');
     }
   }
 
   Future<void> _handleIceCandidate(dynamic data) async {
     try {
-      final senderId = data['senderId'];
-      final candidateData = data['candidate'] as Map<String, dynamic>;
+      if (data == null || data is! Map) return;
+      final senderId = data['senderId']?.toString();
+      if (senderId == null) return;
+      final candidateData = data['candidate'];
+      if (candidateData == null || candidateData is! Map) return;
       
+      final candidateMap = Map<String, dynamic>.from(candidateData);
       final pc = peerConnections[senderId];
       if (pc != null) {
         if (_hasRemoteDescription[senderId] == true) {
-          await pc.addCandidate(RTCIceCandidate(
-            candidateData['candidate'],
-            candidateData['sdpMid'],
-            candidateData['sdpMLineIndex']
-          ));
+          final cand = candidateMap['candidate']?.toString() ?? '';
+          final sdpMid = candidateMap['sdpMid']?.toString();
+          final sdpMLineIndex = candidateMap['sdpMLineIndex'] is int 
+              ? candidateMap['sdpMLineIndex'] as int 
+              : int.tryParse(candidateMap['sdpMLineIndex']?.toString() ?? '');
+          await pc.addCandidate(RTCIceCandidate(cand, sdpMid, sdpMLineIndex));
         } else {
-          _iceCandidateQueue.putIfAbsent(senderId, () => []).add(candidateData);
+          _iceCandidateQueue.putIfAbsent(senderId, () => []).add(candidateMap);
         }
       } else {
-        _iceCandidateQueue.putIfAbsent(senderId, () => []).add(candidateData);
+        _iceCandidateQueue.putIfAbsent(senderId, () => []).add(candidateMap);
       }
     } catch (e) {
-      print('Error handling WebRTC ICE candidate: $e');
+      debugPrint('Error handling WebRTC ICE candidate: $e');
     }
+  }
+
+  void clearRemoteStream() {
+    isPeerConnected = false;
+    remoteRenderer.srcObject = null;
+    for (var pc in peerConnections.values) {
+      try { pc.close(); } catch (_) {}
+    }
+    peerConnections.clear();
+    _iceCandidateQueue.clear();
+    _hasRemoteDescription.clear();
+    onRenderUpdated?.call();
   }
 
   void stop() {
@@ -285,14 +330,10 @@ class WebRTCManager {
     socket.off('webrtc-answer');
     socket.off('webrtc-ice-candidate');
     
+    clearRemoteStream();
     localStream?.getTracks().forEach((t) => t.stop());
     localRenderer.dispose();
     remoteRenderer.dispose();
-    
-    for (var pc in peerConnections.values) {
-      pc.close();
-    }
-    peerConnections.clear();
   }
 }
 

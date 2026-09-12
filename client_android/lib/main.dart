@@ -13,6 +13,8 @@ import 'package:window_manager/window_manager.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:open_filex/open_filex.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'webrtc_manager.dart';
 
 const Map<String, Map<String, String>> _localizedValues = {
   'en': {
@@ -156,7 +158,7 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
-String globalAppVersion = "1.0.1";
+String globalAppVersion = "1.0.2";
 
 bool isNewerVersion(String latest, String current) {
   try {
@@ -1727,6 +1729,7 @@ class _RoomPageState extends State<RoomPage> {
   WebviewPlayer? _mkPlayer;
   bool _playerReady = false; // becomes true once player is initialized
 
+  WebRTCManager? _webrtcManager;
   bool _isLiveStreaming = false;
   Uint8List? _currentLiveFrame;
 
@@ -1880,6 +1883,7 @@ class _RoomPageState extends State<RoomPage> {
   @override
   void dispose() {
     _isDisposed = true;
+    _webrtcManager?.stop();
     _syncTimer?.cancel();
     _controlsTimer?.cancel();
     _mkPlayer?.dispose();
@@ -1917,23 +1921,6 @@ class _RoomPageState extends State<RoomPage> {
   }
 
   void _initSocket() {
-    _mkPlayer?.onWebRTCAnswer = (targetId, answer) {
-      _socket.emit('webrtc-answer', {
-        'targetId': targetId,
-        'senderId': _socket.id,
-        'answer': answer,
-        'roomId': widget.roomId,
-      });
-    };
-    _mkPlayer?.onWebRTCIceCandidate = (targetId, candidate) {
-      _socket.emit('webrtc-ice-candidate', {
-        'targetId': targetId,
-        'senderId': _socket.id,
-        'candidate': candidate,
-        'roomId': widget.roomId,
-      });
-    };
-
     _socket = IO.io(widget.serverUrl, IO.OptionBuilder()
       .setTransports(['websocket'])
       .enableAutoConnect()
@@ -1942,6 +1929,22 @@ class _RoomPageState extends State<RoomPage> {
       .setQuery({'bypass-tunnel-reminder': 'true'})
       .build()
     );
+
+    _webrtcManager = WebRTCManager(
+      socket: _socket,
+      roomId: widget.roomId,
+      isHostResolver: () => _isHost,
+    );
+    _webrtcManager!.onStreamStarted = () {
+      if (mounted) setState(() { _isLiveStreaming = true; });
+    };
+    _webrtcManager!.onRenderUpdated = () {
+      if (mounted) setState(() {});
+    };
+    _webrtcManager!.onStreamStopped = () {
+      if (mounted) setState(() { _isLiveStreaming = false; });
+    };
+    _webrtcManager!.initialize();
 
     _socket.onConnectError((err) {
       debugPrint('[Socket] Connect error: $err');
@@ -2155,6 +2158,7 @@ class _RoomPageState extends State<RoomPage> {
           _currentLiveFrame = null;
         });
         _triggerControlsVisibility();
+        _socket.emit('new-viewer', {'roomId': widget.roomId, 'viewerId': _socket.id});
       } else if (videoUrl.isNotEmpty) {
         _setupVideoPlayer(videoUrl, videoName, startPlaying: isPlaying, startSeconds: calculatedTime, headers: headers);
       }
@@ -2167,24 +2171,7 @@ class _RoomPageState extends State<RoomPage> {
           _currentLiveFrame = null;
         });
         _triggerControlsVisibility();
-      }
-    });
-
-    _socket.on('webrtc-offer', (data) {
-      if (_isDisposed || !mounted) return;
-      final senderId = data['senderId'] as String?;
-      final offer = data['offer'];
-      if (senderId != null && offer != null) {
-        _mkPlayer?.openWebRTC(senderId, offer);
-      }
-    });
-
-    _socket.on('webrtc-ice-candidate', (data) {
-      if (_isDisposed || !mounted) return;
-      final senderId = data['senderId'] as String?;
-      final candidate = data['candidate'];
-      if (senderId != null && candidate != null) {
-        _mkPlayer?.addIceCandidate(senderId, candidate);
+        _socket.emit('new-viewer', {'roomId': widget.roomId, 'viewerId': _socket.id});
       }
     });
 
@@ -2194,6 +2181,7 @@ class _RoomPageState extends State<RoomPage> {
           _isLiveStreaming = false;
           _currentLiveFrame = null;
         });
+        _webrtcManager?.clearRemoteStream();
         try { _mkPlayer?.setVolume(100); } catch (_) {}
         try { _mkPlayer?.open(Media('')); } catch (_) {}
         try { _mkPlayer?.pause(); } catch (_) {}
@@ -2214,6 +2202,10 @@ class _RoomPageState extends State<RoomPage> {
 
     _socket.on('live-frame', (data) {
       if (!mounted) return;
+      // Do not waste CPU decoding JPEGs if WebRTC is already connected
+      if (_webrtcManager != null && _webrtcManager!.isPeerConnected) {
+        return;
+      }
       try {
         Uint8List? bytes;
         if (data is Uint8List) {
@@ -3123,8 +3115,16 @@ class _RoomPageState extends State<RoomPage> {
                               valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF6C63FF)),
                             ),
                           ),
-                        if (_isLiveStreaming)
-                          if (_currentLiveFrame != null)
+                        if (_isLiveStreaming) ...[
+                          if (_webrtcManager != null &&
+                              _webrtcManager!.isPeerConnected &&
+                              _webrtcManager!.remoteRenderer.srcObject != null &&
+                              _webrtcManager!.remoteRenderer.textureId != null)
+                            RTCVideoView(
+                              _webrtcManager!.remoteRenderer,
+                              objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
+                            )
+                          else if (_currentLiveFrame != null)
                             Image.memory(
                               _currentLiveFrame!,
                               fit: BoxFit.contain,
@@ -3146,6 +3146,7 @@ class _RoomPageState extends State<RoomPage> {
                                 ],
                               ),
                             ),
+                        ],
                         AnimatedOpacity(
                           opacity: _showControls ? 1.0 : 0.0,
                           duration: const Duration(milliseconds: 300),

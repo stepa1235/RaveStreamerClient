@@ -160,7 +160,7 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
-String globalAppVersion = "1.0.1";
+String globalAppVersion = "1.0.2";
 
 bool isNewerVersion(String latest, String current) {
   try {
@@ -1666,6 +1666,7 @@ class _RoomPageState extends State<RoomPage> {
       if (mounted) {
         setState(() { _isLiveStreaming = true; });
         _triggerControlsVisibility();
+        _socket.emit('new-viewer', {'roomId': widget.roomId, 'viewerId': _socket.id});
       }
     });
     _socket.on('stream-stopped', (_) {
@@ -1675,11 +1676,15 @@ class _RoomPageState extends State<RoomPage> {
           _isLocalStreamHost = false;
           _currentLiveFrame = null;
         });
+        _webrtcManager?.clearRemoteStream();
       }
     });
 
     _socket.on('live-frame', (data) {
       if (!mounted) return;
+      if (_webrtcManager != null && _webrtcManager!.isPeerConnected) {
+        return;
+      }
       try {
         Uint8List? bytes;
         if (data is Uint8List) {
@@ -1917,6 +1922,7 @@ class _RoomPageState extends State<RoomPage> {
           _currentLiveFrame = null;
         });
         _triggerControlsVisibility();
+        _socket.emit('new-viewer', {'roomId': widget.roomId, 'viewerId': _socket.id});
       } else if (videoUrl.isNotEmpty) {
         _setupVideoPlayer(videoUrl, videoName, startPlaying: isPlaying, startSeconds: calculatedTime, headers: headers);
       }
@@ -2882,6 +2888,7 @@ class _RoomPageState extends State<RoomPage> {
       const username = '${widget.username}\u200B';
       let localStream;
       let peerConnections = {};
+      let latestUsers = [];
 
       const config = {
         iceServers: [
@@ -2958,11 +2965,11 @@ class _RoomPageState extends State<RoomPage> {
                     socket.emit('live-frame', { roomId, frame: buffer });
                   });
                 }
-              }, 'image/jpeg', 0.75);
+              }, 'image/jpeg', 0.5);
             } catch (e) {
               isCapturing = false;
             }
-          }, 33);
+          }, 100);
 
           // Start MediaRecorder for live WebM audio & video stream
           let mediaRecorder;
@@ -2994,6 +3001,16 @@ class _RoomPageState extends State<RoomPage> {
 
           socket.emit('start-stream', { roomId });
 
+          // Proactively initiate WebRTC offer to all existing viewers in the room
+          if (latestUsers && latestUsers.length > 0) {
+            for (const user of latestUsers) {
+              const uId = user.id || user;
+              if (uId && uId !== socket.id && !peerConnections[uId]) {
+                createOffer(uId);
+              }
+            }
+          }
+
         } catch (err) {
           document.getElementById('status').innerText = 'Ошибка выбора вкладки: ' + (err.message || err);
         }
@@ -3001,16 +3018,19 @@ class _RoomPageState extends State<RoomPage> {
 
       socket.on('new-viewer', async (data) => {
         if (!localStream) return;
-        if (data.viewerId && data.viewerId !== socket.id && !peerConnections[data.viewerId]) {
-          await createOffer(data.viewerId);
+        const vId = (data && data.viewerId) ? data.viewerId : data;
+        if (vId && vId !== socket.id) {
+          await createOffer(vId);
         }
       });
 
       socket.on('room-users', async (users) => {
+        latestUsers = users || [];
         if (!localStream) return;
-        for (const user of users) {
-          if (user.id !== socket.id && !peerConnections[user.id]) {
-            await createOffer(user.id);
+        for (const user of latestUsers) {
+          const uId = user.id || user;
+          if (uId && uId !== socket.id && !peerConnections[uId]) {
+            await createOffer(uId);
           }
         }
       });
@@ -3031,29 +3051,38 @@ class _RoomPageState extends State<RoomPage> {
       });
 
       async function createOffer(targetId) {
-        const pc = new RTCPeerConnection(config);
-        peerConnections[targetId] = pc;
-        
-        localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
-        
-        pc.onicecandidate = (event) => {
-          if (event.candidate) {
-            socket.emit('webrtc-ice-candidate', {
-              targetId,
-              candidate: event.candidate,
-              roomId
-            });
+        if (!localStream || targetId === socket.id) return;
+        try {
+          if (peerConnections[targetId]) {
+            try { peerConnections[targetId].close(); } catch(_) {}
+            delete peerConnections[targetId];
           }
-        };
+          const pc = new RTCPeerConnection(config);
+          peerConnections[targetId] = pc;
+          
+          localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+          
+          pc.onicecandidate = (event) => {
+            if (event.candidate) {
+              socket.emit('webrtc-ice-candidate', {
+                targetId,
+                candidate: event.candidate,
+                roomId
+              });
+            }
+          };
 
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
 
-        socket.emit('webrtc-offer', {
-          targetId,
-          offer,
-          roomId
-        });
+          socket.emit('webrtc-offer', {
+            targetId,
+            offer,
+            roomId
+          });
+        } catch (err) {
+          console.error('Error creating offer for ' + targetId, err);
+        }
       }
 
       socket.on('webrtc-answer', async (data) => {

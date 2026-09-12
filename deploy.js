@@ -4,7 +4,7 @@ const path = require('path');
 
 const token = process.env.GITHUB_TOKEN || process.env.TOKEN || '';
 const repo = 'stepa1235/RaveStreamerClient';
-const releaseTag = 'v1.0.1';
+const releaseTag = 'v1.0.2';
 
 const headers = {
   'Authorization': `Bearer ${token}`,
@@ -104,7 +104,7 @@ async function deploy() {
   }, JSON.stringify({
     tag_name: releaseTag,
     name: `Luna ${releaseTag}`,
-    body: 'Luna v1.0.1 - Host persistence by username, host permissions lock on PC & Mobile, remote stream fixes.'
+    body: 'Luna v1.0.2 - Fixed audio and performance lag on Android live stream (Hardware WebRTC RTCVideoView, throttled fallback, instant peer offer exchange).'
   }));
 
   const uploadUrl = release.upload_url;
