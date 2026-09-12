@@ -4,11 +4,9 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
-import 'package:flutter/gestures.dart';
-import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart' show MediaKit;
 import 'package:webview_windows/webview_windows.dart';
-import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'package:http/http.dart' as http;
 import 'package:window_manager/window_manager.dart';
 import 'package:local_notifier/local_notifier.dart';
@@ -16,8 +14,7 @@ import 'package:youtube_explode_dart/youtube_explode_dart.dart' hide Video;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'webrtc_manager.dart';
-import 'package:flutter_webrtc/flutter_webrtc.dart' hide Webview;
-import 'package:wakelock_plus/wakelock_plus.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:path_provider/path_provider.dart';
 
 const Map<String, Map<String, String>> _localizedValues = {
@@ -440,7 +437,11 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
         if (data.containsKey('username')) _savedUsername = data['username'] as String;
         if (data.containsKey('serverUrl')) {
           final sUrl = (data['serverUrl'] as String).trim();
-          if (sUrl.isNotEmpty && !sUrl.contains('loca.lt') && !sUrl.contains('onrender.com')) {
+          if (sUrl.isNotEmpty && 
+              !sUrl.contains('loca.lt') && 
+              !sUrl.contains('onrender.com') && 
+              !sUrl.contains('localhost') && 
+              !sUrl.contains('127.0.0.1')) {
             _savedServerUrl = sUrl;
           } else {
             _savedServerUrl = 'http://luna.lumigrid.ru:3000';
@@ -703,7 +704,9 @@ class _ConnectionPageState extends State<ConnectionPage> {
     super.initState();
     final initialUrl = widget.initialServerUrl.isNotEmpty && 
         !widget.initialServerUrl.contains('loca.lt') && 
-        !widget.initialServerUrl.contains('onrender.com')
+        !widget.initialServerUrl.contains('onrender.com') &&
+        !widget.initialServerUrl.contains('localhost') &&
+        !widget.initialServerUrl.contains('127.0.0.1')
         ? widget.initialServerUrl 
         : 'http://luna.lumigrid.ru:3000';
     _serverController = TextEditingController(
@@ -744,7 +747,11 @@ class _ConnectionPageState extends State<ConnectionPage> {
     });
 
     String serverUrl = _serverController.text.trim();
-    if (serverUrl.isEmpty || serverUrl.contains('loca.lt') || serverUrl.contains('onrender.com')) {
+    if (serverUrl.isEmpty || 
+        serverUrl.contains('loca.lt') || 
+        serverUrl.contains('onrender.com') ||
+        serverUrl.contains('localhost') ||
+        serverUrl.contains('127.0.0.1')) {
       serverUrl = 'http://luna.lumigrid.ru:3000';
       _serverController.text = serverUrl;
     }
@@ -1407,7 +1414,7 @@ class RoomPage extends StatefulWidget {
 }
 
 class _RoomPageState extends State<RoomPage> {
-  late IO.Socket _socket;
+  late io.Socket _socket;
   WebviewPlayer? _mkPlayer;
   bool _playerReady = false; // becomes true once player is initialized
 
@@ -1444,7 +1451,6 @@ class _RoomPageState extends State<RoomPage> {
   final _chatFocusNode = FocusNode(); // FocusNode to keep keyboard open
   
   Timer? _syncTimer;
-  bool _isPlayerVisible = false;
   bool _showControls = true;
   Timer? _controlsTimer;
 
@@ -1600,7 +1606,7 @@ class _RoomPageState extends State<RoomPage> {
 
   // Socket.io initialization and handlers
   void _initSocket() {
-    _socket = IO.io(widget.serverUrl, IO.OptionBuilder()
+    _socket = io.io(widget.serverUrl, io.OptionBuilder()
       .setTransports(['websocket'])
       .enableAutoConnect()
       .enableReconnection()
@@ -1609,6 +1615,13 @@ class _RoomPageState extends State<RoomPage> {
       .setQuery({'bypass-tunnel-reminder': 'true'})
       .build()
     );
+
+    _socket.onConnectError((err) {
+      debugPrint("Socket connect_error: $err");
+    });
+    _socket.onError((err) {
+      debugPrint("Socket error: $err");
+    });
 
     _webrtcManager = WebRTCManager(
       socket: _socket,
@@ -1642,10 +1655,12 @@ class _RoomPageState extends State<RoomPage> {
       }
     });
     _socket.on('stream-stopped', (_) {
-      if (mounted) setState(() {
-        _isLiveStreaming = false;
-        _currentLiveFrame = null;
-      });
+      if (mounted) {
+        setState(() {
+          _isLiveStreaming = false;
+          _currentLiveFrame = null;
+        });
+      }
     });
 
     _socket.on('live-frame', (data) {
@@ -1677,95 +1692,95 @@ class _RoomPageState extends State<RoomPage> {
         'username': widget.username,
         'password': widget.password,
       });
+    });
+
+    _socket.on('room-error', (msg) {
+      if (!mounted || _isDisposed) return;
       
-      _socket.on('room-error', (msg) {
-        if (!mounted || _isDisposed) return;
-        
-        bool isWrongPassword = false;
-        String errorText = msg.toString();
-        
-        if (msg is Map) {
-          if (msg['type'] == 'WRONG_PASSWORD') isWrongPassword = true;
-          errorText = msg['message']?.toString() ?? 'Error';
-        } else if (errorText.contains('пароль') || errorText.contains('password')) {
-          isWrongPassword = true;
-        }
+      bool isWrongPassword = false;
+      String errorText = msg.toString();
+      
+      if (msg is Map) {
+        if (msg['type'] == 'WRONG_PASSWORD') isWrongPassword = true;
+        errorText = msg['message']?.toString() ?? 'Error';
+      } else if (errorText.contains('пароль') || errorText.contains('password')) {
+        isWrongPassword = true;
+      }
 
-        if (isWrongPassword) {
-          final pwController = TextEditingController();
-          showDialog(
-            context: context,
-            barrierDismissible: false,
-            builder: (ctx) => AlertDialog(
-              backgroundColor: const Color(0xFF161426),
-              title: Text(_locale == 'ru' ? 'Приватная комната' : 'Private Room', style: const TextStyle(color: Color(0xFF00F2FE))),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(_locale == 'ru' ? 'Введите правильный пароль:' : 'Enter correct password:', style: const TextStyle(color: Colors.white)),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: pwController,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      filled: true,
-                      fillColor: Colors.black26,
-                      hintText: _locale == 'ru' ? 'Пароль' : 'Password',
-                      hintStyle: const TextStyle(color: Colors.white54),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                    ),
-                  ),
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () {
-                    Navigator.pop(ctx);
-                    _isDisposed = true;
-                    _socket.disconnect();
-                    if (mounted) Navigator.pop(context);
-                  },
-                  child: Text(_locale == 'ru' ? 'Отмена' : 'Cancel', style: const TextStyle(color: Colors.white54)),
-                ),
-                ElevatedButton(
-                  onPressed: () {
-                    Navigator.pop(ctx);
-                    _socket.emit('join-room', {
-                      'roomId': widget.roomId,
-                      'username': widget.username,
-                      'password': pwController.text.trim(),
-                    });
-                  },
-                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00F2FE)),
-                  child: Text(_locale == 'ru' ? 'Войти' : 'Join', style: const TextStyle(color: Colors.black)),
-                ),
-              ],
-            ),
-          );
-          return;
-        }
-
-        _isDisposed = true; // Stop other connections from firing
-        _socket.disconnect();
+      if (isWrongPassword) {
+        final pwController = TextEditingController();
         showDialog(
           context: context,
           barrierDismissible: false,
           builder: (ctx) => AlertDialog(
             backgroundColor: const Color(0xFF161426),
-            title: Text(_locale == 'ru' ? 'Ошибка' : 'Error', style: const TextStyle(color: Colors.redAccent)),
-            content: Text(errorText, style: const TextStyle(color: Colors.white)),
+            title: Text(_locale == 'ru' ? 'Приватная комната' : 'Private Room', style: const TextStyle(color: Color(0xFF00F2FE))),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(_locale == 'ru' ? 'Введите правильный пароль:' : 'Enter correct password:', style: const TextStyle(color: Colors.white)),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: pwController,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    filled: true,
+                    fillColor: Colors.black26,
+                    hintText: _locale == 'ru' ? 'Пароль' : 'Password',
+                    hintStyle: const TextStyle(color: Colors.white54),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                ),
+              ],
+            ),
             actions: [
               TextButton(
                 onPressed: () {
                   Navigator.pop(ctx);
+                  _isDisposed = true;
+                  _socket.disconnect();
                   if (mounted) Navigator.pop(context);
                 },
-                child: const Text('OK', style: TextStyle(color: Color(0xFF00F2FE))),
+                child: Text(_locale == 'ru' ? 'Отмена' : 'Cancel', style: const TextStyle(color: Colors.white54)),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  _socket.emit('join-room', {
+                    'roomId': widget.roomId,
+                    'username': widget.username,
+                    'password': pwController.text.trim(),
+                  });
+                },
+                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00F2FE)),
+                child: Text(_locale == 'ru' ? 'Войти' : 'Join', style: const TextStyle(color: Colors.black)),
               ),
             ],
           ),
         );
-      });
+        return;
+      }
+
+      _isDisposed = true; // Stop other connections from firing
+      _socket.disconnect();
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: const Color(0xFF161426),
+          title: Text(_locale == 'ru' ? 'Ошибка' : 'Error', style: const TextStyle(color: Colors.redAccent)),
+          content: Text(errorText, style: const TextStyle(color: Colors.white)),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                if (mounted) Navigator.pop(context);
+              },
+              child: const Text('OK', style: TextStyle(color: Color(0xFF00F2FE))),
+            ),
+          ],
+        ),
+      );
     });
 
     _socket.onDisconnect((_) {
@@ -1841,7 +1856,6 @@ class _RoomPageState extends State<RoomPage> {
         _isLiveStreaming = isLive;
       });
 
-      final isHost = _isLocalStreamHost || (_users.isNotEmpty && _users[0]['id'] == _socket.id);
       if (isLive) {
         setState(() {
           _isLiveStreaming = true;
@@ -1892,7 +1906,6 @@ class _RoomPageState extends State<RoomPage> {
           _currentVideoUrl = '';
           _currentVideoName = 'No Video Loaded';
           _isLiveStreaming = false;
-          _isPlayerVisible = false;
           _translators = [];
           _currentPageUrl = '';
         });
@@ -2027,9 +2040,12 @@ class _RoomPageState extends State<RoomPage> {
     // Handle join error (e.g. banned)
     _socket.on('join-error', (data) {
       if (_isDisposed || !mounted) return;
-      final errorMsg = data as String;
+      final errorMsg = data?.toString() ?? 'Error joining room';
       _socket.disconnect();
-      /* SnackBar disabled */
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(errorMsg),
+        backgroundColor: Colors.redAccent,
+      ));
       Navigator.of(context).pop(); // Go back to connection page
     });
 
@@ -2095,7 +2111,6 @@ class _RoomPageState extends State<RoomPage> {
     setState(() {
       _currentVideoUrl = url;
       _currentVideoName = name;
-      _isPlayerVisible = true;
     });
 
     _triggerControlsVisibility();
@@ -2284,7 +2299,7 @@ class _RoomPageState extends State<RoomPage> {
             }
           }
         }
-      } catch (e) {}
+      } catch (_) {}
     }
     
     debugPrint('Trying Piped API fallback on client...');
@@ -2305,7 +2320,7 @@ class _RoomPageState extends State<RoomPage> {
             }
           }
         }
-      } catch (e) {}
+      } catch (_) {}
     }
     
     // Fallback to youtube_explode
@@ -2333,7 +2348,7 @@ class _RoomPageState extends State<RoomPage> {
               streams.sort((a, b) => b.videoResolution.height.compareTo(a.videoResolution.height));
               selectedStream = streams.first;
             }
-          } catch(e) {}
+          } catch (_) {}
         }
         selectedStream ??= manifest.muxed.withHighestBitrate();
         
@@ -2354,6 +2369,22 @@ class _RoomPageState extends State<RoomPage> {
     } finally {
       yt.close();
     }
+
+    // Ultimate fallback: server-side extraction on VPS
+    try {
+      final extractUri = Uri.parse('${widget.serverUrl}/extract?url=${Uri.encodeComponent(youtubeUrl)}');
+      final res = await http.get(extractUri, headers: {'bypass-tunnel-reminder': 'true'}).timeout(const Duration(seconds: 15));
+      if (res.statusCode == 200) {
+        final data = jsonDecode(res.body);
+        if (data['success'] == true && data['url'] != null) {
+          debugPrint('VPS extraction for YouTube successful!');
+          return data['url'] as String;
+        }
+      }
+    } catch (e) {
+      debugPrint('VPS fallback error: $e');
+    }
+
     return null;
   }
 
@@ -2377,7 +2408,6 @@ class _RoomPageState extends State<RoomPage> {
       _currentVideoUrl = '';
       _currentVideoName = 'No Video Loaded';
       _isLiveStreaming = false;
-      _isPlayerVisible = false;
       _translators = [];
       _currentPageUrl = '';
     });
@@ -2707,178 +2737,6 @@ class _RoomPageState extends State<RoomPage> {
     }
   }
 
-  bool _isUploading = false;
-
-  Future<void> _uploadAndStreamLocalFile(String filePath, String fileName) async {
-    final file = File(filePath);
-    if (!await file.exists()) {
-      if (!mounted) return;
-      /* SnackBar disabled */
-      return;
-    }
-
-    final totalSize = await file.length();
-    
-    setState(() {
-      _isUploading = true;
-    });
-
-    final progressNotifier = ValueNotifier<double>(0.0);
-    final statusNotifier = ValueNotifier<String>(_locale == 'ru' ? 'Подготовка к загрузке...' : 'Preparing upload...');
-
-    if (!mounted) return;
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: const Color(0xFF100E1C),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: Row(
-            children: [
-              const Icon(Icons.cloud_upload_outlined, color: Color(0xFF00F2FE)),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  _locale == 'ru' ? 'Загрузка файла' : 'Uploading File',
-                  style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
-                ),
-              ),
-            ],
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                fileName,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 13),
-              ),
-              const SizedBox(height: 16),
-              ValueListenableBuilder<double>(
-                valueListenable: progressNotifier,
-                builder: (context, progress, child) {
-                  return Column(
-                    children: [
-                      LinearProgressIndicator(
-                        value: progress,
-                        backgroundColor: Colors.white12,
-                        valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF00F2FE)),
-                      ),
-                      const SizedBox(height: 10),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            '${(progress * 100).toStringAsFixed(1)}%',
-                            style: const TextStyle(color: Color(0xFF00F2FE), fontSize: 12, fontWeight: FontWeight.bold),
-                          ),
-                          Text(
-                            '${(totalSize / (1024 * 1024)).toStringAsFixed(1)} MB',
-                            style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 12),
-                          ),
-                        ],
-                      ),
-                    ],
-                  );
-                }
-              ),
-              const SizedBox(height: 8),
-              ValueListenableBuilder<String>(
-                valueListenable: statusNotifier,
-                builder: (context, status, child) {
-                  return Text(
-                    status,
-                    style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 11),
-                    textAlign: TextAlign.center,
-                  );
-                }
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                _isUploading = false;
-                Navigator.of(context).pop();
-              },
-              child: Text(
-                _locale == 'ru' ? 'Отмена' : 'Cancel',
-                style: const TextStyle(color: Colors.redAccent),
-              ),
-            ),
-          ],
-        );
-      },
-    );
-
-    try {
-      final uploadUri = Uri.parse('${widget.serverUrl}/upload?roomId=${Uri.encodeComponent(widget.roomId)}');
-      final request = MultipartRequestWithProgress(
-        'POST',
-        uploadUri,
-        onProgress: (bytesTransferred, totalBytes) {
-          if (!_isUploading) return;
-          final progress = totalBytes > 0 ? bytesTransferred / totalBytes : 0.0;
-          progressNotifier.value = progress;
-          statusNotifier.value = _locale == 'ru'
-              ? 'Загружено: ${(bytesTransferred / (1024 * 1024)).toStringAsFixed(1)} MB из ${(totalBytes / (1024 * 1024)).toStringAsFixed(1)} MB'
-              : 'Uploaded: ${(bytesTransferred / (1024 * 1024)).toStringAsFixed(1)} MB of ${(totalBytes / (1024 * 1024)).toStringAsFixed(1)} MB';
-        },
-      );
-      
-      request.headers['bypass-tunnel-reminder'] = 'true';
-
-      request.files.add(await http.MultipartFile.fromPath('video', filePath));
-      
-      final streamedResponse = await request.send();
-      final response = await http.Response.fromStream(streamedResponse);
-      
-      if (!_isUploading) return;
-      
-      if (!mounted) return;
-      Navigator.of(context).pop();
-      setState(() {
-        _isUploading = false;
-      });
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
-        if (data['success'] == true) {
-          final relativePath = data['path'] as String;
-          final streamUrl = '${widget.serverUrl}/video?path=${Uri.encodeComponent(relativePath)}';
-          
-          _changeVideo(streamUrl, fileName);
-          
-          if (!mounted) return;
-          /* SnackBar disabled */
-        } else {
-          throw Exception(data['error'] ?? 'Unknown upload error');
-        }
-      } else {
-        throw Exception('Server returned status code ${response.statusCode}');
-      }
-
-    } catch (e) {
-      if (_isUploading) {
-        if (mounted) {
-          Navigator.of(context).pop();
-        }
-      }
-      setState(() {
-        _isUploading = false;
-      });
-      if (mounted) {
-        /* SnackBar disabled */
-      }
-    }
-  }
-
-  // File picker handler: chooses local file and uploads it to Node server
-  // Local file picker removed due to Android build issues with file_picker
-
   bool _isLocalStreamHost = false;
 
   Future<void> _startBrowserBroadcast() async {
@@ -2935,10 +2793,10 @@ class _RoomPageState extends State<RoomPage> {
       document.getElementById('status').innerText = 'Ошибка: Socket.IO библиотека не загружена.';
     }
 
-    const socket = io('${serverUrl}', {
+    const socket = io('$serverUrl', {
       extraHeaders: { 'bypass-tunnel-reminder': 'true' },
       query: { 'bypass-tunnel-reminder': 'true' },
-      transports: ['websocket', 'polling']
+      transports: ['websocket']
     });
 
     const roomId = '${widget.roomId}';
@@ -3392,7 +3250,9 @@ class _RoomPageState extends State<RoomPage> {
 
                         // Live video stream overlay (WebRTC or Frame buffer)
                         if (_isLiveStreaming)
-                          if (_webrtcManager != null &&
+                          if (_isLocalStreamHost)
+                            _buildHostStreamBanner()
+                          else if (_webrtcManager != null &&
                               _webrtcManager!.isPeerConnected &&
                               _webrtcManager!.remoteRenderer.srcObject != null &&
                               _webrtcManager!.remoteRenderer.textureId != null)
@@ -3628,9 +3488,7 @@ class _RoomPageState extends State<RoomPage> {
                                 iconSize: 32,
                                 color: Colors.white,
                                 icon: const Icon(Icons.skip_next),
-                                onPressed: () {
-                                  _socket.emit('skip-video', {'roomId': widget.roomId});
-                                },
+                                onPressed: _skipVideo,
                               ),
                             ],
                           const SizedBox(width: 8),
@@ -4736,33 +4594,6 @@ class _RoomPageState extends State<RoomPage> {
   }
 }
 
-class MultipartRequestWithProgress extends http.MultipartRequest {
-  final void Function(int bytesTransferred, int totalBytes) onProgress;
-
-  MultipartRequestWithProgress(
-    String method,
-    Uri url, {
-    required this.onProgress,
-  }) : super(method, url);
-
-  @override
-  http.ByteStream finalize() {
-    final byteStream = super.finalize();
-    final total = contentLength;
-    int bytes = 0;
-
-    final transformer = StreamTransformer<List<int>, List<int>>.fromHandlers(
-      handleData: (data, sink) {
-        bytes += data.length;
-        onProgress(bytes, total);
-        sink.add(data);
-      },
-    );
-
-    return http.ByteStream(byteStream.transform(transformer));
-  }
-}
-
 // -------------------------------------------------------------
 // Webview-based Player adapter to mimic media_kit interface
 // -------------------------------------------------------------
@@ -4973,8 +4804,13 @@ class WebviewPlayer {
       debugPrint('[webview] Environment initialization error: $e');
     }
 
-    await controller.initialize();
-    _isInitialized = true;
+    try {
+      await controller.initialize();
+      _isInitialized = true;
+    } catch (e) {
+      debugPrint('[webview] controller.initialize() error: $e');
+      _isInitialized = false;
+    }
 
     controller.webMessage.listen((dynamic event) {
       if (event is String) {

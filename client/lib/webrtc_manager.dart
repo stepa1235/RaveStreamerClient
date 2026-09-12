@@ -1,9 +1,9 @@
 import 'package:flutter_webrtc/flutter_webrtc.dart';
-import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'package:socket_io_client/socket_io_client.dart' as io_client;
 import 'package:flutter/foundation.dart';
 
 class WebRTCManager {
-  final IO.Socket socket;
+  final io_client.Socket socket;
   final String roomId;
   final bool Function() isHostResolver;
   
@@ -83,9 +83,12 @@ class WebRTCManager {
       onStreamStarted?.call();
       
       // Stop stream if user stops sharing from OS UI
-      localStream?.getVideoTracks().first.onEnded = () {
-        stopScreenShare();
-      };
+      final videoTracks = localStream?.getVideoTracks();
+      if (videoTracks != null && videoTracks.isNotEmpty) {
+        videoTracks.first.onEnded = () {
+          stopScreenShare();
+        };
+      }
       
     } catch (e) {
       debugPrint('Error starting screen share: $e');
