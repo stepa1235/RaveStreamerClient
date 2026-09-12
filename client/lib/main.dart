@@ -735,7 +735,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
   void initState() {
     super.initState();
     _serverController = TextEditingController(
-      text: widget.initialServerUrl.isNotEmpty ? widget.initialServerUrl : 'https://ravestreamer-stepa-server.loca.lt',
+      text: widget.initialServerUrl.isNotEmpty ? widget.initialServerUrl : 'http://195.133.26.226:3000',
     );
     _usernameController = TextEditingController(
       text: widget.initialUsername.isNotEmpty ? widget.initialUsername : 'User_${(1000 + (DateTime.now().millisecond % 9000))}',

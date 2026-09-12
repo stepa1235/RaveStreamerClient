@@ -352,7 +352,7 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
     // Secondary update check via Render server /version endpoint if Gist didn't check
     final targetServerUrl = _savedServerUrl.isNotEmpty 
         ? _savedServerUrl 
-        : 'https://ravestreamerserver.onrender.com';
+        : 'http://195.133.26.226:3000';
 
     if (!updateChecked) {
       _fetchVersionFromServer(targetServerUrl);
@@ -767,7 +767,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
     super.initState();
     _requestInstallPermissionOnStartup();
     _serverController = TextEditingController(
-      text: widget.initialServerUrl.isNotEmpty ? widget.initialServerUrl : 'https://ravestreamer-stepa-server.loca.lt',
+      text: widget.initialServerUrl.isNotEmpty ? widget.initialServerUrl : 'http://195.133.26.226:3000',
     );
     _usernameController = TextEditingController(
       text: widget.initialUsername.isNotEmpty ? widget.initialUsername : 'User_${(1000 + (DateTime.now().millisecond % 9000))}',
@@ -4323,7 +4323,7 @@ class _RoomPageState extends State<RoomPage> {
                 ),
                 ElevatedButton(
                   onPressed: () {
-                    final targetUrl = widget.serverUrl.isNotEmpty ? widget.serverUrl : 'https://ravestreamerserver.onrender.com';
+                    final targetUrl = widget.serverUrl.isNotEmpty ? widget.serverUrl : 'http://195.133.26.226:3000';
                     _fetchVersionFromServer(targetUrl, verbose: true);
                   },
                   style: ElevatedButton.styleFrom(
