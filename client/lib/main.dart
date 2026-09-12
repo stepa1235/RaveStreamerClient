@@ -1162,22 +1162,36 @@ class _ConnectionPageState extends State<ConnectionPage> {
                         child: Column(
                           children: [
                             Container(
-                              padding: const EdgeInsets.all(16),
                               decoration: BoxDecoration(
-                                color: const Color(0xFF6C63FF).withOpacity(0.15),
-                                shape: BoxShape.circle,
+                                borderRadius: BorderRadius.circular(24),
                                 boxShadow: [
                                   BoxShadow(
-                                    color: const Color(0xFF6C63FF).withOpacity(0.3),
-                                    blurRadius: 15,
-                                    spreadRadius: 1,
+                                    color: const Color(0xFF00F2FE).withOpacity(0.3),
+                                    blurRadius: 20,
+                                    spreadRadius: 2,
                                   )
                                 ],
                               ),
-                              child: const Icon(
-                                Icons.play_circle_filled,
-                                size: 56,
-                                color: Color(0xFF00F2FE),
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(24),
+                                child: Image.asset(
+                                  'assets/logo.png',
+                                  width: 84,
+                                  height: 84,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) => Container(
+                                    padding: const EdgeInsets.all(16),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF6C63FF).withOpacity(0.15),
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: const Icon(
+                                      Icons.play_circle_filled,
+                                      size: 56,
+                                      color: Color(0xFF00F2FE),
+                                    ),
+                                  ),
+                                ),
                               ),
                             ),
                             const SizedBox(height: 16),
