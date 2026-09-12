@@ -1746,14 +1746,14 @@ class _RoomPageState extends State<RoomPage> {
   String? _hostUsername;
 
   bool get _isHost {
-    if (_hostUsername != null && _hostUsername!.isNotEmpty) {
-      final myName = widget.username.trim().toLowerCase();
-      if (myName == _hostUsername!.toLowerCase()) return true;
-    }
     if (_socket.id != null) {
       for (final u in _users) {
         if (u['id'] == _socket.id && u['isHost'] == true) return true;
       }
+    }
+    if (_hostUsername != null && _hostUsername!.isNotEmpty) {
+      final myName = widget.username.trim().toLowerCase();
+      if (myName == _hostUsername!.toLowerCase()) return true;
     }
     if (_hostUsername == null && _users.isNotEmpty && _users[0]['id'] == _socket.id) return true;
     return false;
@@ -2063,9 +2063,45 @@ class _RoomPageState extends State<RoomPage> {
     // Handle user list updates
     _socket.on('room-users', (data) {
       if (_isDisposed || !mounted) return;
+      final updatedUsers = (data as List).where((u) => !(u['username'] as String).endsWith('\u200B')).toList();
+      String? detectedHost;
+      for (var u in updatedUsers) {
+        if (u['isHost'] == true) {
+          detectedHost = u['username'] as String?;
+          break;
+        }
+      }
+
       setState(() {
-        _users = (data as List).where((u) => !(u['username'] as String).endsWith('\u200B')).toList();
+        _users = updatedUsers;
+        if (detectedHost != null && detectedHost.isNotEmpty) {
+          _hostUsername = detectedHost;
+        }
       });
+    });
+
+    _socket.on('host-changed', (data) {
+      if (_isDisposed || !mounted) return;
+      final newHost = data is Map ? (data['hostUsername'] as String?) : null;
+      if (newHost != null && newHost.isNotEmpty) {
+        setState(() {
+          _hostUsername = newHost;
+        });
+        final isMe = newHost.trim().toLowerCase() == widget.username.trim().toLowerCase();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              isMe
+                  ? (_locale == 'ru' ? 'Вы стали хостом комнаты! 👑' : 'You are now the room host! 👑')
+                  : (_locale == 'ru' ? 'Новый хост комнаты: $newHost 👑' : 'New room host: $newHost 👑'),
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+            ),
+            backgroundColor: const Color(0xFF6C63FF),
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
     });
 
     _socket.on('user-joined', (data) {
