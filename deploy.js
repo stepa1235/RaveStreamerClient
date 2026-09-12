@@ -4,7 +4,7 @@ const path = require('path');
 
 const token = process.env.GITHUB_TOKEN || process.env.TOKEN || '';
 const repo = 'stepa1235/RaveStreamerClient';
-const releaseTag = 'v1.0.0';
+const releaseTag = 'v1.0.1';
 
 const headers = {
   'Authorization': `Bearer ${token}`,
@@ -33,34 +33,30 @@ function request(url, options = {}, body = null) {
   });
 }
 
-async function deleteAllOldReleases() {
-  console.log("1. Fetching all existing releases...");
+async function deleteExistingRelease() {
+  console.log(`1. Checking if release ${releaseTag} exists...`);
   try {
     const releases = await request(`https://api.github.com/repos/${repo}/releases`);
     if (Array.isArray(releases)) {
       for (const rel of releases) {
-        console.log(`Deleting release ${rel.name || rel.tag_name} (id: ${rel.id})...`);
-        await request(`https://api.github.com/repos/${repo}/releases/${rel.id}`, { method: 'DELETE' });
+        if (rel.tag_name === releaseTag) {
+          console.log(`Deleting existing release ${rel.name || rel.tag_name} (id: ${rel.id})...`);
+          await request(`https://api.github.com/repos/${repo}/releases/${rel.id}`, { method: 'DELETE' });
+        }
       }
     }
   } catch (e) {
-    console.log("Error or no releases found:", e.message);
+    console.log("Error checking releases:", e.message);
   }
 }
 
-async function deleteAllOldTags() {
-  console.log("2. Fetching all existing tags...");
+async function deleteExistingTag() {
+  console.log(`2. Checking if tag ${releaseTag} exists...`);
   try {
-    const refs = await request(`https://api.github.com/repos/${repo}/git/matching-refs/tags`);
-    if (Array.isArray(refs)) {
-      for (const ref of refs) {
-        const tagName = ref.ref.replace('refs/tags/', '');
-        console.log(`Deleting tag ref ${tagName}...`);
-        await request(`https://api.github.com/repos/${repo}/git/refs/tags/${tagName}`, { method: 'DELETE' });
-      }
-    }
+    await request(`https://api.github.com/repos/${repo}/git/refs/tags/${releaseTag}`, { method: 'DELETE' });
+    console.log(`Deleted existing tag ${releaseTag}`);
   } catch (e) {
-    console.log("Error or no tags found:", e.message);
+    // fine if doesn't exist
   }
 }
 
@@ -99,16 +95,16 @@ async function uploadAsset(uploadUrl, filePath, name, contentType) {
 }
 
 async function deploy() {
-  await deleteAllOldReleases();
-  await deleteAllOldTags();
+  await deleteExistingRelease();
+  await deleteExistingTag();
 
-  console.log("3. Creating new v1.0.0 release...");
+  console.log(`3. Creating new ${releaseTag} release...`);
   const release = await request(`https://api.github.com/repos/${repo}/releases`, {
     method: 'POST'
   }, JSON.stringify({
     tag_name: releaseTag,
     name: `Luna ${releaseTag}`,
-    body: 'Luna v1.0.0 - Official First Release! Synchronized video watching app.'
+    body: 'Luna v1.0.1 - Host persistence by username, host permissions lock on PC & Mobile, remote stream fixes.'
   }));
 
   const uploadUrl = release.upload_url;
@@ -121,7 +117,7 @@ async function deploy() {
   await uploadAsset(uploadUrl, path.join(__dirname, 'Luna.apk'), 'Luna.apk', 'application/vnd.android.package-archive');
   await uploadAsset(uploadUrl, path.join(__dirname, 'RaveStreamer.apk'), 'RaveStreamer.apk', 'application/vnd.android.package-archive');
 
-  console.log("Deployment of Luna v1.0.0 complete!");
+  console.log(`Deployment of Luna ${releaseTag} complete!`);
 }
 
 deploy().catch(console.error);

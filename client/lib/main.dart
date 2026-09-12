@@ -160,7 +160,7 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
-String globalAppVersion = "1.2.2";
+String globalAppVersion = "1.0.1";
 
 bool isNewerVersion(String latest, String current) {
   try {
@@ -1437,6 +1437,22 @@ class _RoomPageState extends State<RoomPage> {
   String _preferredQuality = 'Auto';
   List<dynamic> _translators = [];
   String _currentPageUrl = ''; // original lordfilm/site URL (for translator switching)
+  String? _hostUsername;
+
+  bool get _isHost {
+    if (_isLocalStreamHost) return true;
+    if (_hostUsername != null && _hostUsername!.isNotEmpty) {
+      final myName = widget.username.trim().toLowerCase();
+      if (myName == _hostUsername!.toLowerCase()) return true;
+    }
+    if (_socket.id != null) {
+      for (final u in _users) {
+        if (u['id'] == _socket.id && u['isHost'] == true) return true;
+      }
+    }
+    if (_hostUsername == null && _users.isNotEmpty && _users[0]['id'] == _socket.id) return true;
+    return false;
+  }
   
   // Tabs, Chat & Localization States
   int _selectedTab = 0; // 0 = Controls, 1 = Chat, 2 = Settings
@@ -1485,8 +1501,7 @@ class _RoomPageState extends State<RoomPage> {
     });
     player.stream.completed.listen((completed) {
       if (!completed || _isDisposed || !mounted) return;
-      final isHost = _users.isNotEmpty && _users[0]['id'] == _socket.id;
-      if (isHost) _socket.emit('skip-video', {'roomId': widget.roomId});
+      if (_isHost) _socket.emit('skip-video', {'roomId': widget.roomId});
     });
     player.stream.error.listen((err) {
       debugPrint('[webview] ERROR: $err');
@@ -1626,12 +1641,11 @@ class _RoomPageState extends State<RoomPage> {
     _webrtcManager = WebRTCManager(
       socket: _socket,
       roomId: widget.roomId,
-      isHostResolver: () => _users.isNotEmpty && _users[0]['id'] == _socket.id,
+      isHostResolver: () => _isHost,
     );
     _webrtcManager!.onStreamStarted = () {
       if (mounted) setState(() { _isLiveStreaming = true; });
-      final isHost = _users.isNotEmpty && _users[0]['id'] == _socket.id;
-      if (isHost && _webrtcManager != null) {
+      if (_isHost && _webrtcManager != null) {
         for (var user in _users) {
           final id = user['id'] as String;
           if (id != _socket.id) {
@@ -1798,8 +1812,7 @@ class _RoomPageState extends State<RoomPage> {
     _socket.on('room-users', (data) {
       if (_isDisposed || !mounted) return;
       
-      final isHost = _users.isNotEmpty && _users[0]['id'] == _socket.id;
-      if (_webrtcManager != null && isHost && _isLiveStreaming) {
+      if (_webrtcManager != null && _isHost && _isLiveStreaming) {
         final currentIds = _users.map((u) => u['id'] as String).toSet();
         for (var user in data) {
           final id = user['id'] as String;
@@ -1820,8 +1833,7 @@ class _RoomPageState extends State<RoomPage> {
       if (newUser != null) {
         final username = newUser['username'] as String? ?? '';
         if (!username.endsWith('\u200B')) {
-          final isHost = _users.isNotEmpty && _users[0]['id'] == _socket.id;
-          if (_webrtcManager != null && isHost && _isLiveStreaming) {
+          if (_webrtcManager != null && _isHost && _isLiveStreaming) {
             _webrtcManager!.createConnectionForViewer(newUser['id'] as String);
           }
           setState(() {
@@ -1852,11 +1864,15 @@ class _RoomPageState extends State<RoomPage> {
       final queueData = data['queue'] as List<dynamic>? ?? [];
       final headers = data['headers'] as Map<String, dynamic>?;
       final isLive = data['isLiveStreaming'] as bool? ?? false;
+      final hostUser = data['hostUsername'] as String?;
 
       setState(() {
         _hasJoinedRoom = true;
         _queue = queueData;
         _isLiveStreaming = isLive;
+        if (hostUser != null && hostUser.isNotEmpty) {
+          _hostUsername = hostUser;
+        }
       });
 
       if (isLive) {
@@ -1892,6 +1908,18 @@ class _RoomPageState extends State<RoomPage> {
         try { _mkPlayer?.open(Media('')); } catch (_) {}
         try { _mkPlayer?.pause(); } catch (_) {}
       }
+    });
+
+    _socket.on('action-error', (data) {
+      if (!mounted) return;
+      final msg = data is Map ? (data['message'] ?? 'Действие отклонено') : 'Действие отклонено';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(msg.toString(), style: const TextStyle(color: Colors.white)),
+          backgroundColor: Colors.redAccent,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
     });
 
     // Handle video change event
@@ -2628,6 +2656,7 @@ class _RoomPageState extends State<RoomPage> {
 
 
   void _skipVideo() {
+    if (!_isHost) return;
     _socket.emit('skip-video', {
       'roomId': widget.roomId,
     });
@@ -2635,6 +2664,7 @@ class _RoomPageState extends State<RoomPage> {
 
   // Handle local user control events and broadcast them
   void _localPlay() {
+    if (!_isHost) return;
     if (_mkPlayer == null) return;
     _mkPlayer!.play();
     _socket.emit('play', {
@@ -2644,6 +2674,7 @@ class _RoomPageState extends State<RoomPage> {
   }
 
   void _localPause() {
+    if (!_isHost) return;
     if (_mkPlayer == null) return;
     _mkPlayer!.pause();
     _socket.emit('pause', {
@@ -2653,6 +2684,7 @@ class _RoomPageState extends State<RoomPage> {
   }
 
   void _localSeek(double seconds) {
+    if (!_isHost) return;
     if (_mkPlayer == null) return;
     _isIncomingUpdate = true;
     _mkPlayer!.seek(Duration(milliseconds: (seconds * 1000).toInt())).then((_) {
@@ -2668,8 +2700,7 @@ class _RoomPageState extends State<RoomPage> {
   void _sendPeriodicSync() {
     if (_mkPlayer == null || !_isConnected) return;
     
-    final isHost = _users.isNotEmpty && _users[0]['id'] == _socket.id;
-    if (isHost) {
+    if (_isHost) {
       _socket.emit('sync-state', {
         'roomId': widget.roomId,
         'isPlaying': _mkPlayer!.state.playing,
@@ -2713,8 +2744,7 @@ class _RoomPageState extends State<RoomPage> {
   void _handlePeriodicSync(bool serverIsPlaying, double serverSeconds) {
     if (_mkPlayer == null || _isIncomingUpdate) return;
 
-    final isHost = _users.isNotEmpty && _users[0]['id'] == _socket.id;
-    if (isHost) return;
+    if (_isHost) return;
 
     final localSeconds = _mkPlayer!.state.position.inMilliseconds / 1000.0;
     final drift = (localSeconds - serverSeconds).abs();
@@ -3412,7 +3442,7 @@ class _RoomPageState extends State<RoomPage> {
               textAlign: TextAlign.center,
               style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 14),
             ),
-            if (Platform.isWindows) ...[
+            if (Platform.isWindows && _isHost) ...[
               const SizedBox(height: 24),
               ElevatedButton.icon(
                 onPressed: () {
@@ -3442,7 +3472,7 @@ class _RoomPageState extends State<RoomPage> {
   Widget _buildVideoControlsOverlay() {
     if (_mkPlayer == null) return const SizedBox.shrink();
 
-    final isMeHost = _users.isNotEmpty && _users[0]['id'] == _socket.id;
+    final isMeHost = _isHost;
 
     final position = _mkPlayer!.state.position;
     final duration = _mkPlayer!.state.duration;
@@ -3601,7 +3631,7 @@ class _RoomPageState extends State<RoomPage> {
                                   ],
                                 ),
                               )
-                            else ...[
+                            else if (isMeHost) ...[
                               IconButton(
                                 iconSize: 42,
                                 color: Colors.white,
@@ -3778,7 +3808,85 @@ class _RoomPageState extends State<RoomPage> {
 
   Widget _buildControlsTab() {
     // Check if the current user is host
-    final isMeHost = _users.isEmpty || _users[0]['id'] == _socket.id || _isLocalStreamHost;
+    final isMeHost = _isHost;
+
+    if (!isMeHost) {
+      return SingleChildScrollView(
+        child: Column(
+          children: [
+            const SizedBox(height: 20),
+            _buildCard(
+              child: Column(
+                children: [
+                  const Icon(Icons.lock, size: 42, color: Color(0xFF00F2FE)),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Управление у Хоста 👑',
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    _locale == 'ru'
+                        ? 'Только создатель комнаты может менять фильм, ставить на паузу или запускать трансляцию.'
+                        : 'Only the room host can change videos, control playback, or start broadcasts.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 12, color: Colors.white.withOpacity(0.6)),
+                  ),
+                ],
+              ),
+            ),
+            if (_queue.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              _buildCard(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      _locale == 'ru' ? 'Очередь воспроизведения' : 'Playback Queue',
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    ListView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      itemCount: _queue.length,
+                      itemBuilder: (context, index) {
+                        final video = _queue[index];
+                        return Container(
+                          margin: const EdgeInsets.symmetric(vertical: 4),
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.03),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Row(
+                            children: [
+                              Text(
+                                '${index + 1}.',
+                                style: const TextStyle(color: Color(0xFF00F2FE), fontSize: 12, fontWeight: FontWeight.bold),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  (video['videoName'] ?? video['name'] ?? 'Web Stream').toString(),
+                                  style: const TextStyle(fontSize: 12, color: Colors.white),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      );
+    }
 
     return SingleChildScrollView(
       child: Column(
@@ -4075,7 +4183,7 @@ class _RoomPageState extends State<RoomPage> {
               itemBuilder: (context, index) {
                 final user = _users[index];
                 final isMe = user['id'] == _socket.id;
-                final isHost = index == 0; // First user is host
+                final isHost = user['isHost'] == true || (_hostUsername != null && (user['username'] as String).toLowerCase() == _hostUsername!.toLowerCase()) || index == 0;
 
                 return Padding(
                   padding: const EdgeInsets.symmetric(vertical: 4.0, horizontal: 4),
@@ -4626,7 +4734,7 @@ class _RoomPageState extends State<RoomPage> {
     showDialog(
       context: context,
       builder: (context) {
-        final isMeHost = _users.isNotEmpty && _users[0]['id'] == _socket.id;
+        final isMeHost = _isHost;
         
         return AlertDialog(
           title: Text(_loc('activeUsers')),
@@ -4639,7 +4747,7 @@ class _RoomPageState extends State<RoomPage> {
               itemBuilder: (context, index) {
                 final user = _users[index];
                 final isMe = user['id'] == _socket.id;
-                final isHost = index == 0;
+                final isHost = user['isHost'] == true || (_hostUsername != null && (user['username'] as String).toLowerCase() == _hostUsername!.toLowerCase()) || index == 0;
                 
                 return ListTile(
                   leading: CircleAvatar(

@@ -156,7 +156,7 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
-String globalAppVersion = "1.0.0";
+String globalAppVersion = "1.0.1";
 
 bool isNewerVersion(String latest, String current) {
   try {
@@ -1743,6 +1743,21 @@ class _RoomPageState extends State<RoomPage> {
   String _preferredQuality = 'Auto';
   List<dynamic> _translators = [];
   String _currentPageUrl = ''; // original lordfilm/site URL (for translator switching)
+  String? _hostUsername;
+
+  bool get _isHost {
+    if (_hostUsername != null && _hostUsername!.isNotEmpty) {
+      final myName = widget.username.trim().toLowerCase();
+      if (myName == _hostUsername!.toLowerCase()) return true;
+    }
+    if (_socket.id != null) {
+      for (final u in _users) {
+        if (u['id'] == _socket.id && u['isHost'] == true) return true;
+      }
+    }
+    if (_hostUsername == null && _users.isNotEmpty && _users[0]['id'] == _socket.id) return true;
+    return false;
+  }
   
   // Tabs, Chat & Localization States
   int _selectedTab = 0; // 0 = Controls, 1 = Chat, 2 = Settings
@@ -1783,8 +1798,7 @@ class _RoomPageState extends State<RoomPage> {
     });
     player.stream.completed.listen((completed) {
       if (!completed || _isDisposed || !mounted) return;
-      final isHost = _users.isNotEmpty && _users[0]['id'] == _socket.id;
-      if (isHost) _socket.emit('skip-video', {'roomId': widget.roomId});
+      if (_isHost) _socket.emit('skip-video', {'roomId': widget.roomId});
     });
     player.stream.error.listen((err) {
       debugPrint('[webview] ERROR: $err');
@@ -2088,11 +2102,15 @@ class _RoomPageState extends State<RoomPage> {
       final queueData = data['queue'] as List<dynamic>? ?? [];
       final headers = data['headers'] as Map<String, dynamic>?;
       final isLive = data['isLiveStreaming'] as bool? ?? false;
+      final hostUser = data['hostUsername'] as String?;
 
       setState(() {
         _hasJoinedRoom = true;
         _queue = queueData;
         _isLiveStreaming = isLive;
+        if (hostUser != null && hostUser.isNotEmpty) {
+          _hostUsername = hostUser;
+        }
       });
 
       if (isLive) {
@@ -2144,6 +2162,18 @@ class _RoomPageState extends State<RoomPage> {
         try { _mkPlayer?.open(Media('')); } catch (_) {}
         try { _mkPlayer?.pause(); } catch (_) {}
       }
+    });
+
+    _socket.on('action-error', (data) {
+      if (!mounted) return;
+      final msg = data is Map ? (data['message'] ?? 'Действие отклонено') : 'Действие отклонено';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(msg.toString(), style: const TextStyle(color: Colors.white)),
+          backgroundColor: Colors.redAccent,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
     });
 
     _socket.on('live-frame', (data) {
@@ -2791,6 +2821,7 @@ class _RoomPageState extends State<RoomPage> {
 
   // Handle local user control events and broadcast them
   void _localPlay() {
+    if (!_isHost) return;
     if (_mkPlayer == null) return;
     _mkPlayer!.play();
     _socket.emit('play', {
@@ -2800,6 +2831,7 @@ class _RoomPageState extends State<RoomPage> {
   }
 
   void _localPause() {
+    if (!_isHost) return;
     if (_mkPlayer == null) return;
     _mkPlayer!.pause();
     _socket.emit('pause', {
@@ -2809,6 +2841,7 @@ class _RoomPageState extends State<RoomPage> {
   }
 
   void _localSeek(double seconds) {
+    if (!_isHost) return;
     if (_mkPlayer == null) return;
     _isIncomingUpdate = true;
     _mkPlayer!.seek(Duration(milliseconds: (seconds * 1000).toInt())).then((_) {
@@ -2824,8 +2857,7 @@ class _RoomPageState extends State<RoomPage> {
   void _sendPeriodicSync() {
     if (_mkPlayer == null || !_isConnected) return;
     
-    final isHost = _users.isNotEmpty && _users[0]['id'] == _socket.id;
-    if (isHost) {
+    if (_isHost) {
       _socket.emit('sync-state', {
         'roomId': widget.roomId,
         'isPlaying': _mkPlayer!.state.playing,
@@ -2869,8 +2901,7 @@ class _RoomPageState extends State<RoomPage> {
   void _handlePeriodicSync(bool serverIsPlaying, double serverSeconds) {
     if (_mkPlayer == null || _isIncomingUpdate) return;
 
-    final isHost = _users.isNotEmpty && _users[0]['id'] == _socket.id;
-    if (isHost) return;
+    if (_isHost) return;
 
     final localSeconds = _mkPlayer!.state.position.inMilliseconds / 1000.0;
     final drift = (localSeconds - serverSeconds).abs();
@@ -3134,7 +3165,7 @@ class _RoomPageState extends State<RoomPage> {
     final duration = _mkPlayer!.state.duration;
     final isPlaying = _mkPlayer!.state.playing;
     final volume = _mkPlayer!.state.volume / 100.0; // media_kit volume is 0-100
-    final isMeHost = _users.isNotEmpty && _users[0]['id'] == _socket.id;
+    final isMeHost = _isHost;
 
     String formatDuration(Duration d) {
       String twoDigits(int n) => n.toString().padLeft(2, "0");
@@ -3500,7 +3531,7 @@ class _RoomPageState extends State<RoomPage> {
 
   Widget _buildControlsTab() {
     // Check if the current user is host
-    final isMeHost = _users.isNotEmpty && _users[0]['id'] == _socket.id;
+    final isMeHost = _isHost;
 
     if (!isMeHost) {
       return SingleChildScrollView(
@@ -3765,7 +3796,7 @@ class _RoomPageState extends State<RoomPage> {
               itemBuilder: (context, index) {
                 final user = _users[index];
                 final isMe = user['id'] == _socket.id;
-                final isHost = index == 0; // First user is host
+                final isHost = user['isHost'] == true || (_hostUsername != null && (user['username'] as String).toLowerCase() == _hostUsername!.toLowerCase()) || index == 0;
 
                 return Padding(
                   padding: const EdgeInsets.symmetric(vertical: 4.0, horizontal: 4),
@@ -4528,7 +4559,7 @@ class _RoomPageState extends State<RoomPage> {
     showDialog(
       context: context,
       builder: (context) {
-        final isMeHost = _users.isNotEmpty && _users[0]['id'] == _socket.id;
+        final isMeHost = _isHost;
         
         return AlertDialog(
           title: Text(_loc('activeUsers')),
@@ -4541,7 +4572,7 @@ class _RoomPageState extends State<RoomPage> {
               itemBuilder: (context, index) {
                 final user = _users[index];
                 final isMe = user['id'] == _socket.id;
-                final isHost = index == 0;
+                final isHost = user['isHost'] == true || (_hostUsername != null && (user['username'] as String).toLowerCase() == _hostUsername!.toLowerCase()) || index == 0;
                 
                 return ListTile(
                   leading: CircleAvatar(
