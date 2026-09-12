@@ -2752,9 +2752,9 @@ class _RoomPageState extends State<RoomPage> {
           .replaceAll(RegExp(r'/$'), '');
       String socketIoJsContent = '';
       try {
-        final f = File('C:\\RaveStreamer\\server\\node_modules\\socket.io\\client-dist\\socket.io.min.js');
-        if (f.existsSync()) {
-          socketIoJsContent = f.readAsStringSync();
+        final res = await http.get(Uri.parse('$serverUrl/socket.io/socket.io.js')).timeout(const Duration(seconds: 4));
+        if (res.statusCode == 200 && res.body.isNotEmpty) {
+          socketIoJsContent = res.body;
         }
       } catch (_) {}
 
@@ -2764,7 +2764,17 @@ class _RoomPageState extends State<RoomPage> {
 <head>
   <meta charset="utf-8">
   <title>Luna - Трансляция</title>
-  <script src="/socket.io.js"></script>
+  <script src="$serverUrl/socket.io/socket.io.js"></script>
+  <script>
+    if (typeof io === 'undefined') {
+      document.write('<script src="/socket.io.js"><\\/script>');
+    }
+  </script>
+  <script>
+    if (typeof io === 'undefined') {
+      document.write('<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"><\\/script>');
+    }
+  </script>
   <style>
     body { background-color: #161426; color: white; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; font-family: sans-serif; text-align: center; }
     h2 { color: #00F2FE; }
@@ -2790,233 +2800,249 @@ class _RoomPageState extends State<RoomPage> {
 
   <script>
     if (typeof io === 'undefined') {
-      document.getElementById('status').innerText = 'Ошибка: Socket.IO библиотека не загружена.';
-    }
+      document.getElementById('status').innerHTML = '<span style="color:#ff4444;font-weight:bold;">Ошибка: Socket.IO библиотека не загрузилась.<br>Проверьте соединение с сервером или обновите страницу.</span>';
+    } else {
+      const socket = io('$serverUrl', {
+        extraHeaders: { 'bypass-tunnel-reminder': 'true' },
+        query: { 'bypass-tunnel-reminder': 'true' },
+        transports: ['websocket']
+      });
 
-    const socket = io('$serverUrl', {
-      extraHeaders: { 'bypass-tunnel-reminder': 'true' },
-      query: { 'bypass-tunnel-reminder': 'true' },
-      transports: ['websocket']
-    });
+      const roomId = '${widget.roomId}';
+      const password = '${widget.password ?? ''}';
+      const username = '${widget.username}\u200B';
+      let localStream;
+      let peerConnections = {};
 
-    const roomId = '${widget.roomId}';
-    const password = '${widget.password ?? ''}';
-    const username = '${widget.username}\u200B';
-    let localStream;
-    let peerConnections = {};
+      const config = {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun.yandex.ru:3478' }
+        ]
+      };
 
-    const config = {
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun.yandex.ru:3478' }
-      ]
-    };
+      let iceCandidateQueue = {};
+      let hasRemoteDescription = {};
 
-    let iceCandidateQueue = {};
-    let hasRemoteDescription = {};
+      socket.on('connect', () => {
+        document.getElementById('status').innerText = 'Подключено к серверу! Нажмите кнопку выше, чтобы выбрать вкладку.';
+        socket.emit('join-room', { roomId, username, password });
+      });
 
-    socket.on('connect', () => {
-      document.getElementById('status').innerText = 'Подключено к серверу! Нажмите кнопку выше, чтобы выбрать вкладку.';
-      socket.emit('join-room', { roomId, username, password });
-    });
+      socket.on('connect_error', (err) => {
+        document.getElementById('status').innerText = 'Ошибка подключения к серверу: ' + (err.message || err);
+      });
 
-    socket.on('connect_error', (err) => {
-      document.getElementById('status').innerText = 'Ошибка подключения к серверу: ' + (err.message || err);
-    });
-
-    document.getElementById('startBtn').onclick = async () => {
-      try {
-        localStream = await navigator.mediaDevices.getDisplayMedia({
-          video: {
-            displaySurface: "browser",
-            frameRate: { ideal: 30, max: 60 },
-            width: { ideal: 1280 },
-            height: { ideal: 720 }
-          },
-          audio: {
-            echoCancellation: false,
-            noiseSuppression: false,
-            autoGainControl: false,
-            suppressLocalAudioPlayback: false
-          },
-          systemAudio: "include"
-        });
-        
-        const prevEl = document.getElementById('preview');
-        prevEl.srcObject = localStream;
-        prevEl.muted = true;
-        prevEl.volume = 0;
-        try { await prevEl.play(); } catch (_) {}
-        document.getElementById('status').innerHTML = '<span style="color:#00FF66;font-weight:bold;">✅ ТРАНСЛЯЦИЯ АКТИВНА!</span><br>Теперь вы можете свернуть это окно.';
-        document.getElementById('startBtn').style.display = 'none';
-
-        // Start GPU frame broadcasting at 30 FPS using createImageBitmap
-        const videoTrack = localStream.getVideoTracks()[0];
-        const canvas = document.createElement('canvas');
-        canvas.width = 1280;
-        canvas.height = 720;
-        const ctx = canvas.getContext('2d');
-        let isCapturing = false;
-
-        let frameInterval = setInterval(async () => {
-          if (!localStream || !localStream.active || !videoTrack || videoTrack.readyState !== 'live' || isCapturing) return;
-          isCapturing = true;
-          try {
-            let frameBitmap;
-            if (typeof createImageBitmap === 'function') {
-              try { frameBitmap = await createImageBitmap(videoTrack); } catch (_) {}
-            }
-            if (frameBitmap) {
-              ctx.drawImage(frameBitmap, 0, 0, canvas.width, canvas.height);
-              try { frameBitmap.close(); } catch (_) {}
-            } else if (prevEl.videoWidth > 0) {
-              ctx.drawImage(prevEl, 0, 0, canvas.width, canvas.height);
-            }
-            canvas.toBlob((blob) => {
-              isCapturing = false;
-              if (blob && blob.size > 0) {
-                blob.arrayBuffer().then((buffer) => {
-                  socket.emit('live-frame', { roomId, frame: buffer });
-                });
-              }
-            }, 'image/jpeg', 0.75);
-          } catch (e) {
-            isCapturing = false;
-          }
-        }, 33);
-
-        // Start MediaRecorder for live WebM audio & video stream
-        let mediaRecorder;
+      document.getElementById('startBtn').onclick = async () => {
         try {
-          let options = { mimeType: 'video/webm;codecs=vp8,opus', videoBitsPerSecond: 2500000 };
-          if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-            options = { mimeType: 'video/webm' };
-          }
-          mediaRecorder = new MediaRecorder(localStream, options);
-          mediaRecorder.ondataavailable = async (e) => {
-            if (e.data && e.data.size > 0) {
-              const buffer = await e.data.arrayBuffer();
-              socket.emit('live-stream-chunk', { roomId, chunk: buffer });
+          localStream = await navigator.mediaDevices.getDisplayMedia({
+            video: {
+              displaySurface: "browser",
+              frameRate: { ideal: 30, max: 60 },
+              width: { ideal: 1280 },
+              height: { ideal: 720 }
+            },
+            audio: {
+              echoCancellation: false,
+              noiseSuppression: false,
+              autoGainControl: false,
+              suppressLocalAudioPlayback: false
+            },
+            systemAudio: "include"
+          });
+          
+          const prevEl = document.getElementById('preview');
+          prevEl.srcObject = localStream;
+          prevEl.muted = true;
+          prevEl.volume = 0;
+          try { await prevEl.play(); } catch (_) {}
+          document.getElementById('status').innerHTML = '<span style="color:#00FF66;font-weight:bold;">✅ ТРАНСЛЯЦИЯ АКТИВНА!</span><br>Теперь вы можете свернуть это окно.';
+          document.getElementById('startBtn').style.display = 'none';
+
+          // Start GPU frame broadcasting at 30 FPS using createImageBitmap
+          const videoTrack = localStream.getVideoTracks()[0];
+          const canvas = document.createElement('canvas');
+          canvas.width = 1280;
+          canvas.height = 720;
+          const ctx = canvas.getContext('2d');
+          let isCapturing = false;
+
+          let frameInterval = setInterval(async () => {
+            if (!localStream || !localStream.active || !videoTrack || videoTrack.readyState !== 'live' || isCapturing) return;
+            isCapturing = true;
+            try {
+              let frameBitmap;
+              if (typeof createImageBitmap === 'function') {
+                try { frameBitmap = await createImageBitmap(videoTrack); } catch (_) {}
+              }
+              if (frameBitmap) {
+                ctx.drawImage(frameBitmap, 0, 0, canvas.width, canvas.height);
+                try { frameBitmap.close(); } catch (_) {}
+              } else if (prevEl.videoWidth > 0) {
+                ctx.drawImage(prevEl, 0, 0, canvas.width, canvas.height);
+              }
+              canvas.toBlob((blob) => {
+                isCapturing = false;
+                if (blob && blob.size > 0) {
+                  blob.arrayBuffer().then((buffer) => {
+                    socket.emit('live-frame', { roomId, frame: buffer });
+                  });
+                }
+              }, 'image/jpeg', 0.75);
+            } catch (e) {
+              isCapturing = false;
             }
-          };
-          mediaRecorder.start(100);
-        } catch (mErr) {
-          console.log('MediaRecorder error:', mErr);
-        }
+          }, 33);
 
-        localStream.getVideoTracks()[0].onended = () => {
-          if (frameInterval) clearInterval(frameInterval);
-          if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-            try { mediaRecorder.stop(); } catch(_) {}
+          // Start MediaRecorder for live WebM audio & video stream
+          let mediaRecorder;
+          try {
+            let options = { mimeType: 'video/webm;codecs=vp8,opus', videoBitsPerSecond: 2500000 };
+            if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+              options = { mimeType: 'video/webm' };
+            }
+            mediaRecorder = new MediaRecorder(localStream, options);
+            mediaRecorder.ondataavailable = async (e) => {
+              if (e.data && e.data.size > 0) {
+                const buffer = await e.data.arrayBuffer();
+                socket.emit('live-stream-chunk', { roomId, chunk: buffer });
+              }
+            };
+            mediaRecorder.start(100);
+          } catch (mErr) {
+            console.log('MediaRecorder error:', mErr);
           }
-          socket.emit('stop-stream', { roomId });
-          document.getElementById('status').innerText = 'Трансляция завершена.';
-        };
 
-        socket.emit('start-stream', { roomId });
+          localStream.getVideoTracks()[0].onended = () => {
+            if (frameInterval) clearInterval(frameInterval);
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+              try { mediaRecorder.stop(); } catch(_) {}
+            }
+            socket.emit('stop-stream', { roomId });
+            document.getElementById('status').innerText = 'Трансляция завершена.';
+          };
 
-      } catch (err) {
-        document.getElementById('status').innerText = 'Ошибка выбора вкладки: ' + (err.message || err);
-      }
-    };
+          socket.emit('start-stream', { roomId });
 
-    socket.on('new-viewer', async (data) => {
-      if (!localStream) return;
-      if (data.viewerId && data.viewerId !== socket.id && !peerConnections[data.viewerId]) {
-        await createOffer(data.viewerId);
-      }
-    });
-
-    socket.on('room-users', async (users) => {
-      if (!localStream) return;
-      for (const user of users) {
-        if (user.id !== socket.id && !peerConnections[user.id]) {
-          await createOffer(user.id);
-        }
-      }
-    });
-
-    socket.on('user-joined', async (user) => {
-      if (!localStream) return;
-      const targetId = user.id || user;
-      if (targetId && targetId !== socket.id && !peerConnections[targetId]) {
-        await createOffer(targetId);
-      }
-    });
-
-    socket.on('user-left', (data) => {
-      if (peerConnections[data.id]) {
-        peerConnections[data.id].close();
-        delete peerConnections[data.id];
-      }
-    });
-
-    async function createOffer(targetId) {
-      const pc = new RTCPeerConnection(config);
-      peerConnections[targetId] = pc;
-      
-      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
-      
-      pc.onicecandidate = e => {
-        if (e.candidate) {
-          socket.emit('webrtc-ice-candidate', { targetId, senderId: socket.id, candidate: e.candidate, roomId });
+        } catch (err) {
+          document.getElementById('status').innerText = 'Ошибка выбора вкладки: ' + (err.message || err);
         }
       };
 
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      
-      socket.emit('webrtc-offer', { targetId, senderId: socket.id, offer, roomId });
-    }
+      socket.on('new-viewer', async (data) => {
+        if (!localStream) return;
+        if (data.viewerId && data.viewerId !== socket.id && !peerConnections[data.viewerId]) {
+          await createOffer(data.viewerId);
+        }
+      });
 
-    socket.on('webrtc-answer', async (data) => {
-      if (peerConnections[data.senderId]) {
-        const pc = peerConnections[data.senderId];
-        await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-        hasRemoteDescription[data.senderId] = true;
-        if (iceCandidateQueue[data.senderId]) {
-          for (const candidate of iceCandidateQueue[data.senderId]) {
-            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      socket.on('room-users', async (users) => {
+        if (!localStream) return;
+        for (const user of users) {
+          if (user.id !== socket.id && !peerConnections[user.id]) {
+            await createOffer(user.id);
           }
-          delete iceCandidateQueue[data.senderId];
         }
-      }
-    });
+      });
 
-    socket.on('webrtc-ice-candidate', async (data) => {
-      if (peerConnections[data.senderId]) {
-        const pc = peerConnections[data.senderId];
-        if (hasRemoteDescription[data.senderId]) {
-          await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
-        } else {
-          if (!iceCandidateQueue[data.senderId]) iceCandidateQueue[data.senderId] = [];
-          iceCandidateQueue[data.senderId].push(data.candidate);
+      socket.on('user-joined', async (user) => {
+        if (!localStream) return;
+        const targetId = user.id || user;
+        if (targetId && targetId !== socket.id && !peerConnections[targetId]) {
+          await createOffer(targetId);
         }
-      }
-    });
+      });
 
-    socket.on('stream-stopped', () => {
-      document.body.innerHTML = '<h2>Трансляция завершена</h2><p>Можете закрыть эту вкладку.</p>';
-      window.close();
-    });
+      socket.on('user-left', (data) => {
+        if (peerConnections[data.id]) {
+          peerConnections[data.id].close();
+          delete peerConnections[data.id];
+        }
+      });
+
+      async function createOffer(targetId) {
+        const pc = new RTCPeerConnection(config);
+        peerConnections[targetId] = pc;
+        
+        localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+        
+        pc.onicecandidate = (event) => {
+          if (event.candidate) {
+            socket.emit('webrtc-ice-candidate', {
+              targetId,
+              candidate: event.candidate,
+              roomId
+            });
+          }
+        };
+
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+
+        socket.emit('webrtc-offer', {
+          targetId,
+          offer,
+          roomId
+        });
+      }
+
+      socket.on('webrtc-answer', async (data) => {
+        if (peerConnections[data.senderId]) {
+          const pc = peerConnections[data.senderId];
+          await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+          hasRemoteDescription[data.senderId] = true;
+          if (iceCandidateQueue[data.senderId]) {
+            for (const candidate of iceCandidateQueue[data.senderId]) {
+              await pc.addIceCandidate(new RTCIceCandidate(candidate));
+            }
+            delete iceCandidateQueue[data.senderId];
+          }
+        }
+      });
+
+      socket.on('webrtc-ice-candidate', async (data) => {
+        if (peerConnections[data.senderId]) {
+          const pc = peerConnections[data.senderId];
+          if (hasRemoteDescription[data.senderId]) {
+            await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+          } else {
+            if (!iceCandidateQueue[data.senderId]) iceCandidateQueue[data.senderId] = [];
+            iceCandidateQueue[data.senderId].push(data.candidate);
+          }
+        }
+      });
+
+      socket.on('stream-stopped', () => {
+        document.body.innerHTML = '<h2>Трансляция завершена</h2><p>Можете закрыть эту вкладку.</p>';
+        window.close();
+      });
+    }
   </script>
 </body>
 </html>
       ''';
 
-      _localHttpServer?.listen((HttpRequest request) {
+      _localHttpServer?.listen((HttpRequest request) async {
         if (request.uri.path == '/socket.io.js') {
+          if (socketIoJsContent.isEmpty) {
+            try {
+              final res = await http.get(Uri.parse('$serverUrl/socket.io/socket.io.js')).timeout(const Duration(seconds: 4));
+              if (res.statusCode == 200 && res.body.isNotEmpty) {
+                socketIoJsContent = res.body;
+              }
+            } catch (_) {}
+          }
           request.response.headers.contentType = ContentType('application', 'javascript', charset: 'utf-8');
           request.response.write(socketIoJsContent);
-          request.response.close();
+          await request.response.close();
         } else if (request.uri.path == '/' || request.uri.path == '/index.html') {
           request.response.headers.contentType = ContentType.html;
           request.response.write(html);
-          request.response.close();
+          await request.response.close();
         } else {
           request.response.statusCode = HttpStatus.notFound;
-          request.response.close();
+          await request.response.close();
         }
       });
 
