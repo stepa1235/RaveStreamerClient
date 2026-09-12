@@ -21,7 +21,15 @@ class WebRTCManager {
     'iceServers': [
       {'urls': 'stun:stun.l.google.com:19302'},
       {'urls': 'stun:stun1.l.google.com:19302'},
-      {'urls': 'stun:stun.yandex.ru:3478'},
+      {'urls': 'stun:195.133.26.226:3478'},
+      {
+        'urls': [
+          'turn:195.133.26.226:3478?transport=udp',
+          'turn:195.133.26.226:3478?transport=tcp',
+        ],
+        'username': 'luna',
+        'credential': 'luna2026secret',
+      },
     ]
   };
 
@@ -177,14 +185,30 @@ class WebRTCManager {
       onRenderUpdated?.call();
     };
 
+    pc.onConnectionState = (state) {
+      debugPrint('Connection state with $senderId: $state');
+      if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
+        isPeerConnected = true;
+      } else if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
+                 state == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected ||
+                 state == RTCPeerConnectionState.RTCPeerConnectionStateClosed) {
+        isPeerConnected = false;
+      }
+      onRenderUpdated?.call();
+    };
+
     pc.onAddStream = (stream) {
       remoteRenderer.srcObject = stream;
+      isPeerConnected = true;
       onStreamStarted?.call();
       onRenderUpdated?.call();
     };
 
     pc.onTrack = (event) async {
       debugPrint('Got remote track: ${event.track.kind}, streams: ${event.streams.length}');
+      if (event.track.kind == 'audio') {
+        event.track.enabled = true;
+      }
       if (event.streams.isNotEmpty) {
         remoteRenderer.srcObject = event.streams[0];
       } else {
@@ -195,6 +219,7 @@ class WebRTCManager {
           debugPrint('Failed to add track to remote stream: $e');
         }
       }
+      isPeerConnected = true;
       onStreamStarted?.call();
       onRenderUpdated?.call();
     };

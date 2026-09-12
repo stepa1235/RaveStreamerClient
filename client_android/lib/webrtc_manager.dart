@@ -23,7 +23,15 @@ class WebRTCManager {
     'iceServers': [
       {'urls': 'stun:stun.l.google.com:19302'},
       {'urls': 'stun:stun1.l.google.com:19302'},
-      {'urls': 'stun:stun.yandex.ru:3478'},
+      {'urls': 'stun:195.133.26.226:3478'},
+      {
+        'urls': [
+          'turn:195.133.26.226:3478?transport=udp',
+          'turn:195.133.26.226:3478?transport=tcp',
+        ],
+        'username': 'luna',
+        'credential': 'luna2026secret',
+      },
     ]
   };
 
@@ -43,6 +51,9 @@ class WebRTCManager {
     await remoteRenderer.initialize();
 
     if (Platform.isAndroid || Platform.isIOS) {
+      try {
+        await Helper.setSpeakerphoneOn(true);
+      } catch (_) {}
       try {
         MethodChannel('com.example.client/permissions').invokeMethod('setMediaAudioMode');
       } catch (e) {
@@ -187,9 +198,24 @@ class WebRTCManager {
         }
       };
 
+      pc.onConnectionState = (state) {
+        debugPrint('Peer connection state with $senderId: $state');
+        if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
+          isPeerConnected = true;
+          onRenderUpdated?.call();
+        } else if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
+                   state == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected ||
+                   state == RTCPeerConnectionState.RTCPeerConnectionStateClosed) {
+          isPeerConnected = false;
+          onRenderUpdated?.call();
+        }
+      };
+
       pc.onAddStream = (stream) {
         remoteRenderer.srcObject = stream;
+        isPeerConnected = true;
         if (Platform.isAndroid || Platform.isIOS) {
+          try { Helper.setSpeakerphoneOn(true); } catch (_) {}
           try { MethodChannel('com.example.client/permissions').invokeMethod('setMediaAudioMode'); } catch (_) {}
         }
         onStreamStarted?.call();
@@ -198,6 +224,12 @@ class WebRTCManager {
 
       pc.onTrack = (event) async {
         debugPrint('Got remote track: ${event.track.kind}, streams: ${event.streams.length}');
+        if (event.track.kind == 'audio') {
+          event.track.enabled = true;
+          try {
+            await Helper.setSpeakerphoneOn(true);
+          } catch (_) {}
+        }
         if (event.streams.isNotEmpty) {
           remoteRenderer.srcObject = event.streams[0];
         } else {
@@ -213,6 +245,7 @@ class WebRTCManager {
             MethodChannel('com.example.client/permissions').invokeMethod('setMediaAudioMode');
           } catch (_) {}
         }
+        isPeerConnected = true;
         onStreamStarted?.call();
         onRenderUpdated?.call();
       };

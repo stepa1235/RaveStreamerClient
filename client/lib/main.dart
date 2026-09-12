@@ -160,7 +160,7 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
-String globalAppVersion = "1.0.2";
+String globalAppVersion = "1.0.3";
 
 bool isNewerVersion(String latest, String current) {
   try {
@@ -1658,7 +1658,12 @@ class _RoomPageState extends State<RoomPage> {
       isHostResolver: () => _isHost,
     );
     _webrtcManager!.onStreamStarted = () {
-      if (mounted) setState(() { _isLiveStreaming = true; });
+      if (mounted) {
+        setState(() {
+          _isLiveStreaming = true;
+          _currentLiveFrame = null;
+        });
+      }
       if (_isHost && _webrtcManager != null) {
         for (var user in _users) {
           final id = user['id'] as String;
@@ -1669,7 +1674,12 @@ class _RoomPageState extends State<RoomPage> {
       }
     };
     _webrtcManager!.onRenderUpdated = () {
-      if (mounted) setState(() {});
+      if (mounted) {
+        if (_webrtcManager != null && _webrtcManager!.isPeerConnected && _currentLiveFrame != null) {
+          _currentLiveFrame = null;
+        }
+        setState(() {});
+      }
     };
     _webrtcManager!.onStreamStopped = () {
       if (mounted) setState(() { _isLiveStreaming = false; });
@@ -1678,7 +1688,10 @@ class _RoomPageState extends State<RoomPage> {
 
     _socket.on('stream-started', (_) {
       if (mounted) {
-        setState(() { _isLiveStreaming = true; });
+        setState(() {
+          _isLiveStreaming = true;
+          _currentLiveFrame = null;
+        });
         _triggerControlsVisibility();
         _socket.emit('new-viewer', {'roomId': widget.roomId, 'viewerId': _socket.id});
       }
@@ -1697,6 +1710,9 @@ class _RoomPageState extends State<RoomPage> {
     _socket.on('live-frame', (data) {
       if (!mounted) return;
       if (_webrtcManager != null && _webrtcManager!.isPeerConnected) {
+        if (_currentLiveFrame != null) {
+          setState(() { _currentLiveFrame = null; });
+        }
         return;
       }
       try {
@@ -2908,7 +2924,15 @@ class _RoomPageState extends State<RoomPage> {
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
-          { urls: 'stun:stun.yandex.ru:3478' }
+          { urls: 'stun:195.133.26.226:3478' },
+          {
+            urls: [
+              'turn:195.133.26.226:3478?transport=udp',
+              'turn:195.133.26.226:3478?transport=tcp'
+            ],
+            username: 'luna',
+            credential: 'luna2026secret'
+          }
         ]
       };
 
@@ -2947,19 +2971,40 @@ class _RoomPageState extends State<RoomPage> {
           prevEl.muted = true;
           prevEl.volume = 0;
           try { await prevEl.play(); } catch (_) {}
-          document.getElementById('status').innerHTML = '<span style="color:#00FF66;font-weight:bold;">✅ ТРАНСЛЯЦИЯ АКТИВНА!</span><br>Теперь вы можете свернуть это окно.';
+          
+          const hasAudio = localStream.getAudioTracks().length > 0;
+          if (hasAudio) {
+            document.getElementById('status').innerHTML = '<span style="color:#00FF66;font-weight:bold;font-size:18px;">✅ ТРАНСЛЯЦИЯ АКТИВНА (Видео + Звук)!</span><br><p style="color:#aaa;margin-top:8px;">Звук и видео успешно передаются. Теперь вы можете свернуть это окно браузера.</p>';
+          } else {
+            document.getElementById('status').innerHTML = '<div style="background:#4a2200;border:2px solid #ffaa00;padding:16px;border-radius:10px;margin:15px 0;text-align:left;"><span style="color:#ffaa00;font-size:18px;font-weight:bold;">⚠️ ВНИМАНИЕ: ЗВУК НЕ ЗАХВАЧЕН!</span><br><br>При выборе вкладки не была включена передача звука.<br>Зрители будут видеть картинку, но без звука.<br><br><b>Как включить звук:</b><br>1. Нажмите «Остановить трансляцию» в приложении Luna.<br>2. Начните заново и в окне выбора вкладки обязательно включите галочку <b>«Также предоставить доступ к аудио вкладки»</b> («Also share tab audio»).</div>';
+          }
           document.getElementById('startBtn').style.display = 'none';
 
-          // Start GPU frame broadcasting at 30 FPS using createImageBitmap
+          // Lightweight preview / fallback frame broadcaster (640x360, 3 FPS)
+          // When WebRTC P2P is connected, it pauses to save 100% bandwidth
           const videoTrack = localStream.getVideoTracks()[0];
           const canvas = document.createElement('canvas');
-          canvas.width = 1280;
-          canvas.height = 720;
+          canvas.width = 640;
+          canvas.height = 360;
           const ctx = canvas.getContext('2d');
           let isCapturing = false;
 
           let frameInterval = setInterval(async () => {
             if (!localStream || !localStream.active || !videoTrack || videoTrack.readyState !== 'live' || isCapturing) return;
+
+            // Check if any peer is connected via WebRTC
+            let hasP2P = false;
+            for (const pc of Object.values(peerConnections)) {
+              if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed' || pc.connectionState === 'connected') {
+                hasP2P = true;
+                break;
+              }
+            }
+            // If WebRTC is active, only send occasional 1-frame preview every 3 seconds
+            if (hasP2P && (Date.now() % 3000 > 350)) {
+              return;
+            }
+
             isCapturing = true;
             try {
               let frameBitmap;
@@ -2979,36 +3024,14 @@ class _RoomPageState extends State<RoomPage> {
                     socket.emit('live-frame', { roomId, frame: buffer });
                   });
                 }
-              }, 'image/jpeg', 0.5);
+              }, 'image/jpeg', 0.4);
             } catch (e) {
               isCapturing = false;
             }
-          }, 100);
-
-          // Start MediaRecorder for live WebM audio & video stream
-          let mediaRecorder;
-          try {
-            let options = { mimeType: 'video/webm;codecs=vp8,opus', videoBitsPerSecond: 2500000 };
-            if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-              options = { mimeType: 'video/webm' };
-            }
-            mediaRecorder = new MediaRecorder(localStream, options);
-            mediaRecorder.ondataavailable = async (e) => {
-              if (e.data && e.data.size > 0) {
-                const buffer = await e.data.arrayBuffer();
-                socket.emit('live-stream-chunk', { roomId, chunk: buffer });
-              }
-            };
-            mediaRecorder.start(100);
-          } catch (mErr) {
-            console.log('MediaRecorder error:', mErr);
-          }
+          }, 300);
 
           localStream.getVideoTracks()[0].onended = () => {
             if (frameInterval) clearInterval(frameInterval);
-            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-              try { mediaRecorder.stop(); } catch(_) {}
-            }
             socket.emit('stop-stream', { roomId });
             document.getElementById('status').innerText = 'Трансляция завершена.';
           };

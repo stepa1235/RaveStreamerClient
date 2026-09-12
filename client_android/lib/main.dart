@@ -158,7 +158,7 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
-String globalAppVersion = "1.0.2";
+String globalAppVersion = "1.0.3";
 
 bool isNewerVersion(String latest, String current) {
   try {
@@ -1950,10 +1950,20 @@ class _RoomPageState extends State<RoomPage> {
       isHostResolver: () => _isHost,
     );
     _webrtcManager!.onStreamStarted = () {
-      if (mounted) setState(() { _isLiveStreaming = true; });
+      if (mounted) {
+        setState(() {
+          _isLiveStreaming = true;
+          _currentLiveFrame = null;
+        });
+      }
     };
     _webrtcManager!.onRenderUpdated = () {
-      if (mounted) setState(() {});
+      if (mounted) {
+        if (_webrtcManager != null && _webrtcManager!.isPeerConnected && _currentLiveFrame != null) {
+          _currentLiveFrame = null;
+        }
+        setState(() {});
+      }
     };
     _webrtcManager!.onStreamStopped = () {
       if (mounted) setState(() { _isLiveStreaming = false; });
@@ -2218,6 +2228,9 @@ class _RoomPageState extends State<RoomPage> {
       if (!mounted) return;
       // Do not waste CPU decoding JPEGs if WebRTC is already connected
       if (_webrtcManager != null && _webrtcManager!.isPeerConnected) {
+        if (_currentLiveFrame != null) {
+          setState(() { _currentLiveFrame = null; });
+        }
         return;
       }
       try {
