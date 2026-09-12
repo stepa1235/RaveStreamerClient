@@ -1601,8 +1601,10 @@ class _RoomPageState extends State<RoomPage> {
   // Socket.io initialization and handlers
   void _initSocket() {
     _socket = IO.io(widget.serverUrl, IO.OptionBuilder()
-      .setTransports(['polling', 'websocket'])
-      .disableAutoConnect()
+      .setTransports(['websocket'])
+      .enableAutoConnect()
+      .enableReconnection()
+      .setReconnectionDelay(1000)
       .setExtraHeaders({'bypass-tunnel-reminder': 'true'})
       .setQuery({'bypass-tunnel-reminder': 'true'})
       .build()
@@ -2936,7 +2938,7 @@ class _RoomPageState extends State<RoomPage> {
     const socket = io('${serverUrl}', {
       extraHeaders: { 'bypass-tunnel-reminder': 'true' },
       query: { 'bypass-tunnel-reminder': 'true' },
-      transports: ['polling', 'websocket']
+      transports: ['websocket', 'polling']
     });
 
     const roomId = '${widget.roomId}';
