@@ -4,20 +4,15 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
-import 'package:flutter/gestures.dart';
-import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart' show MediaKit;
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
-import 'package:file_picker/file_picker.dart';
 import 'package:http/http.dart' as http;
 import 'package:window_manager/window_manager.dart';
-import 'package:youtube_explode_dart/youtube_explode_dart.dart' hide Video;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:open_filex/open_filex.dart';
-import 'package:apk_sideload/install_apk.dart';
 
 const Map<String, Map<String, String>> _localizedValues = {
   'en': {
@@ -161,7 +156,7 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
-String globalAppVersion = "1.2.2";
+String globalAppVersion = "1.0.0";
 
 bool isNewerVersion(String latest, String current) {
   try {
@@ -344,15 +339,23 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
     // Fallback to saved URL from settings
     final data = await loadSettings();
     if (data.containsKey('serverUrl') && _savedServerUrl.isEmpty) {
+      final savedUrl = (data['serverUrl'] as String).trim();
+      if (!savedUrl.contains('localhost') && !savedUrl.contains('127.0.0.1') && !savedUrl.contains('loca.lt') && !savedUrl.contains('onrender.com')) {
+        setState(() {
+          _savedServerUrl = savedUrl;
+        });
+      }
+    }
+
+    if (_savedServerUrl.isEmpty) {
       setState(() {
-        _savedServerUrl = data['serverUrl'] as String;
+        _savedServerUrl = 'http://luna.lumigrid.ru:3000';
       });
     }
 
-    // Secondary update check via Render server /version endpoint if Gist didn't check
     final targetServerUrl = _savedServerUrl.isNotEmpty 
         ? _savedServerUrl 
-        : 'http://195.133.26.226:3000';
+        : 'http://luna.lumigrid.ru:3000';
 
     if (!updateChecked) {
       _fetchVersionFromServer(targetServerUrl);
@@ -478,15 +481,9 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
   }
 
   Future<void> _downloadAndInstallUpdate(String downloadUrl, String version, [BuildContext? parentContext]) async {
-    BuildContext? targetContext = _navigatorKey.currentContext ?? parentContext ?? context;
-    if (targetContext != null && !targetContext.mounted) {
+    BuildContext targetContext = _navigatorKey.currentContext ?? parentContext ?? context;
+    if (!targetContext.mounted) {
       targetContext = parentContext ?? context;
-    }
-    if (targetContext == null) {
-      try {
-        await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
-      } catch (_) {}
-      return;
     }
 
     double progress = 0.0;
@@ -768,9 +765,11 @@ class _ConnectionPageState extends State<ConnectionPage> {
     _requestInstallPermissionOnStartup();
     final initialUrl = widget.initialServerUrl.isNotEmpty && 
         !widget.initialServerUrl.contains('loca.lt') && 
-        !widget.initialServerUrl.contains('onrender.com')
+        !widget.initialServerUrl.contains('onrender.com') &&
+        !widget.initialServerUrl.contains('localhost') &&
+        !widget.initialServerUrl.contains('127.0.0.1')
         ? widget.initialServerUrl 
-        : 'http://195.133.26.226:3000';
+        : 'http://luna.lumigrid.ru:3000';
     _serverController = TextEditingController(
       text: initialUrl,
     );
@@ -851,8 +850,8 @@ class _ConnectionPageState extends State<ConnectionPage> {
       }
     }
 
-    if (serverUrl.isEmpty) {
-      serverUrl = 'http://127.0.0.1:3000';
+    if (serverUrl.isEmpty || serverUrl.contains('localhost') || serverUrl.contains('127.0.0.1')) {
+      serverUrl = 'http://luna.lumigrid.ru:3000';
       _serverController.text = serverUrl;
     }
 
@@ -1235,15 +1234,9 @@ class _ConnectionPageState extends State<ConnectionPage> {
   }
 
   Future<void> _downloadAndInstallUpdate(String downloadUrl, String version, [BuildContext? parentContext]) async {
-    BuildContext? targetContext = parentContext ?? context;
-    if (targetContext != null && !targetContext.mounted) {
+    BuildContext targetContext = parentContext ?? context;
+    if (!targetContext.mounted) {
       targetContext = context;
-    }
-    if (targetContext == null) {
-      try {
-        await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
-      } catch (_) {}
-      return;
     }
 
     double progress = 0.0;
@@ -1765,7 +1758,6 @@ class _RoomPageState extends State<RoomPage> {
   final _chatFocusNode = FocusNode(); // FocusNode to keep keyboard open
   
   Timer? _syncTimer;
-  bool _isPlayerVisible = false;
   bool _showControls = true;
   Timer? _controlsTimer;
 
@@ -1929,12 +1921,20 @@ class _RoomPageState extends State<RoomPage> {
     };
 
     _socket = IO.io(widget.serverUrl, IO.OptionBuilder()
-      .setTransports(['polling', 'websocket'])
-      .disableAutoConnect()
+      .setTransports(['websocket'])
+      .enableAutoConnect()
+      .enableReconnection()
       .setExtraHeaders({'bypass-tunnel-reminder': 'true'})
       .setQuery({'bypass-tunnel-reminder': 'true'})
       .build()
     );
+
+    _socket.onConnectError((err) {
+      debugPrint('[Socket] Connect error: $err');
+    });
+    _socket.onError((err) {
+      debugPrint('[Socket] Error: $err');
+    });
 
     _socket.onConnect((_) {
       if (_isDisposed || !mounted) return;
@@ -2095,7 +2095,6 @@ class _RoomPageState extends State<RoomPage> {
         _isLiveStreaming = isLive;
       });
 
-      final isHost = _users.isNotEmpty && _users[0]['id'] == _socket.id;
       if (isLive) {
         setState(() {
           _isLiveStreaming = true;
@@ -2155,6 +2154,8 @@ class _RoomPageState extends State<RoomPage> {
           bytes = data;
         } else if (data is List) {
           bytes = Uint8List.fromList(data.cast<int>());
+        } else if (data is Map && data['data'] is List) {
+          bytes = Uint8List.fromList((data['data'] as List).cast<int>());
         }
         if (bytes != null && bytes.isNotEmpty) {
           setState(() {
@@ -2179,7 +2180,6 @@ class _RoomPageState extends State<RoomPage> {
           _currentVideoUrl = '';
           _currentVideoName = 'No Video Loaded';
           _isLiveStreaming = false;
-          _isPlayerVisible = false;
           _translators = [];
           _currentPageUrl = '';
         });
@@ -2294,9 +2294,14 @@ class _RoomPageState extends State<RoomPage> {
     // Handle join error (e.g. banned)
     _socket.on('join-error', (data) {
       if (_isDisposed || !mounted) return;
-      final errorMsg = data as String;
+      final errorMsg = data.toString();
       _socket.disconnect();
-      /* SnackBar disabled */
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(errorMsg),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
       Navigator.of(context).pop(); // Go back to connection page
     });
 
@@ -2362,7 +2367,6 @@ class _RoomPageState extends State<RoomPage> {
     setState(() {
       _currentVideoUrl = url;
       _currentVideoName = name;
-      _isPlayerVisible = true;
     });
 
     _triggerControlsVisibility();
@@ -2528,7 +2532,6 @@ class _RoomPageState extends State<RoomPage> {
       _currentVideoUrl = '';
       _currentVideoName = 'No Video Loaded';
       _isLiveStreaming = false;
-      _isPlayerVisible = false;
       _translators = [];
       _currentPageUrl = '';
     });
@@ -2893,195 +2896,9 @@ class _RoomPageState extends State<RoomPage> {
     }
   }
 
-  bool _isUploading = false;
 
-  Future<void> _uploadAndStreamLocalFile(String filePath, String fileName) async {
-    final file = File(filePath);
-    if (!await file.exists()) {
-      if (!mounted) return;
-      /* SnackBar disabled */
-      return;
-    }
 
-    final totalSize = await file.length();
-    
-    setState(() {
-      _isUploading = true;
-    });
 
-    final progressNotifier = ValueNotifier<double>(0.0);
-    final statusNotifier = ValueNotifier<String>(_locale == 'ru' ? 'Подготовка к загрузке...' : 'Preparing upload...');
-
-    if (!mounted) return;
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: const Color(0xFF100E1C),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: Row(
-            children: [
-              const Icon(Icons.cloud_upload_outlined, color: Color(0xFF00F2FE)),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  _locale == 'ru' ? 'Загрузка файла' : 'Uploading File',
-                  style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
-                ),
-              ),
-            ],
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                fileName,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 13),
-              ),
-              const SizedBox(height: 16),
-              ValueListenableBuilder<double>(
-                valueListenable: progressNotifier,
-                builder: (context, progress, child) {
-                  return Column(
-                    children: [
-                      LinearProgressIndicator(
-                        value: progress,
-                        backgroundColor: Colors.white12,
-                        valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF00F2FE)),
-                      ),
-                      const SizedBox(height: 10),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            '${(progress * 100).toStringAsFixed(1)}%',
-                            style: const TextStyle(color: Color(0xFF00F2FE), fontSize: 12, fontWeight: FontWeight.bold),
-                          ),
-                          Text(
-                            '${(totalSize / (1024 * 1024)).toStringAsFixed(1)} MB',
-                            style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 12),
-                          ),
-                        ],
-                      ),
-                    ],
-                  );
-                }
-              ),
-              const SizedBox(height: 8),
-              ValueListenableBuilder<String>(
-                valueListenable: statusNotifier,
-                builder: (context, status, child) {
-                  return Text(
-                    status,
-                    style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 11),
-                    textAlign: TextAlign.center,
-                  );
-                }
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                _isUploading = false;
-                Navigator.of(context).pop();
-              },
-              child: Text(
-                _locale == 'ru' ? 'Отмена' : 'Cancel',
-                style: const TextStyle(color: Colors.redAccent),
-              ),
-            ),
-          ],
-        );
-      },
-    );
-
-    try {
-      final uploadUri = Uri.parse('${widget.serverUrl}/upload?roomId=${Uri.encodeComponent(widget.roomId)}');
-      final request = MultipartRequestWithProgress(
-        'POST',
-        uploadUri,
-        onProgress: (bytesTransferred, totalBytes) {
-          if (!_isUploading) return;
-          final progress = totalBytes > 0 ? bytesTransferred / totalBytes : 0.0;
-          progressNotifier.value = progress;
-          statusNotifier.value = _locale == 'ru'
-              ? 'Загружено: ${(bytesTransferred / (1024 * 1024)).toStringAsFixed(1)} MB из ${(totalBytes / (1024 * 1024)).toStringAsFixed(1)} MB'
-              : 'Uploaded: ${(bytesTransferred / (1024 * 1024)).toStringAsFixed(1)} MB of ${(totalBytes / (1024 * 1024)).toStringAsFixed(1)} MB';
-        },
-      );
-      
-      request.headers['bypass-tunnel-reminder'] = 'true';
-
-      request.files.add(await http.MultipartFile.fromPath('video', filePath));
-      
-      final streamedResponse = await request.send();
-      final response = await http.Response.fromStream(streamedResponse);
-      
-      if (!_isUploading) return;
-      
-      if (!mounted) return;
-      Navigator.of(context).pop();
-      setState(() {
-        _isUploading = false;
-      });
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
-        if (data['success'] == true) {
-          final relativePath = data['path'] as String;
-          final streamUrl = '${widget.serverUrl}/video?path=${Uri.encodeComponent(relativePath)}';
-          
-          _changeVideo(streamUrl, fileName);
-          
-          if (!mounted) return;
-          /* SnackBar disabled */
-        } else {
-          throw Exception(data['error'] ?? 'Unknown upload error');
-        }
-      } else {
-        throw Exception('Server returned status code ${response.statusCode}');
-      }
-
-    } catch (e) {
-      if (_isUploading) {
-        if (mounted) {
-          Navigator.of(context).pop();
-        }
-      }
-      setState(() {
-        _isUploading = false;
-      });
-      if (mounted) {
-        /* SnackBar disabled */
-      }
-    }
-  }
-
-  // File picker handler: chooses local file and uploads it to Node server
-  Future<void> _pickLocalFile() async {
-    try {
-      final result = await FilePicker.pickFiles(
-        type: FileType.video,
-        allowMultiple: false,
-      );
-
-      if (result != null && result.files.single.path != null) {
-        final filePath = result.files.single.path!;
-        final fileName = result.files.single.name;
-        
-        _uploadAndStreamLocalFile(filePath, fileName);
-      }
-    } catch (e) {
-      if (!mounted) return;
-      debugPrint('Error picking file: $e');
-      /* SnackBar disabled */
-    }
-  }
 
   void _triggerControlsVisibility() {
     setState(() {
@@ -3230,7 +3047,7 @@ class _RoomPageState extends State<RoomPage> {
                       children: [
                         if (_playerReady && _mkPlayer != null && _mkPlayer!.isInitialized)
                           Offstage(
-                            offstage: _isLiveStreaming && _currentLiveFrame != null,
+                            offstage: _isLiveStreaming,
                             child: WebViewWidget(controller: _mkPlayer!.controller),
                           )
                         else
@@ -3239,12 +3056,29 @@ class _RoomPageState extends State<RoomPage> {
                               valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF6C63FF)),
                             ),
                           ),
-                        if (_isLiveStreaming && _currentLiveFrame != null)
-                          Image.memory(
-                            _currentLiveFrame!,
-                            fit: BoxFit.contain,
-                            gaplessPlayback: true,
-                          ),
+                        if (_isLiveStreaming)
+                          if (_currentLiveFrame != null)
+                            Image.memory(
+                              _currentLiveFrame!,
+                              fit: BoxFit.contain,
+                              gaplessPlayback: true,
+                            )
+                          else
+                            Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const CircularProgressIndicator(
+                                    valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF00F2FE)),
+                                  ),
+                                  const SizedBox(height: 16),
+                                  Text(
+                                    _locale == 'ru' ? 'Подключение к трансляции...' : 'Connecting to stream...',
+                                    style: const TextStyle(color: Colors.white70, fontSize: 14),
+                                  ),
+                                ],
+                              ),
+                            ),
                         AnimatedOpacity(
                           opacity: _showControls ? 1.0 : 0.0,
                           duration: const Duration(milliseconds: 300),
@@ -3467,9 +3301,7 @@ class _RoomPageState extends State<RoomPage> {
                                 iconSize: 32,
                                 color: Colors.white,
                                 icon: const Icon(Icons.skip_next),
-                                onPressed: () {
-                                  _socket.emit('skip-video', {'roomId': widget.roomId});
-                                },
+                                onPressed: _skipVideo,
                               ),
                             ] else ...[
                               Container(
@@ -4679,72 +4511,6 @@ class _RoomPageState extends State<RoomPage> {
     );
   }
 
-  // Collapsed Sidebar for Mobile Devices
-  Widget _buildControlSidebarCollapsed() {
-    return Container(
-      color: const Color(0xFF100E1C),
-      padding: const EdgeInsets.all(16.0),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _urlInputController,
-                  decoration: InputDecoration(
-                    hintText: _loc('pasteVideoUrl'),
-                    hintStyle: TextStyle(color: Colors.white.withOpacity(0.3), fontSize: 13),
-                    isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              // Use flat TextButton instead of solid elevated button
-              TextButton(
-                onPressed: () {
-                  _changeVideo(_urlInputController.text, 'Web Stream');
-                  _urlInputController.clear();
-                },
-                style: TextButton.styleFrom(
-                  foregroundColor: const Color(0xFF00F2FE),
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                ),
-                child: Text(_loc('load'), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Expanded(
-                child: Text(
-                  '${_loc('video')}$_currentVideoName',
-                  style: TextStyle(fontSize: 12, color: Colors.white.withOpacity(0.6)),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              TextButton.icon(
-                onPressed: _pickLocalFile,
-                icon: const Icon(Icons.folder_open, size: 14),
-                label: Text(_loc('chooseVideoFile'), style: const TextStyle(fontSize: 11)),
-              ),
-              TextButton.icon(
-                onPressed: _showChatDialog,
-                icon: const Icon(Icons.chat_bubble_outline, size: 14),
-                label: Text(_loc('chat'), style: const TextStyle(fontSize: 11)),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildCard({required Widget child}) {
     return Container(
       padding: const EdgeInsets.all(12),
@@ -4829,57 +4595,10 @@ class _RoomPageState extends State<RoomPage> {
     );
   }
 
-  // Mobile Chat Dialog
-  void _showChatDialog() {
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: Text(_loc('chatRoom')),
-          backgroundColor: const Color(0xFF161426),
-          content: SizedBox(
-            width: 350,
-            height: 450,
-            child: _buildChatTab(),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: Text(_loc('close')),
-            ),
-          ],
-        );
-      },
-    );
-  }
+
 }
 
-class MultipartRequestWithProgress extends http.MultipartRequest {
-  final void Function(int bytesTransferred, int totalBytes) onProgress;
 
-  MultipartRequestWithProgress(
-    String method,
-    Uri url, {
-    required this.onProgress,
-  }) : super(method, url);
-
-  @override
-  http.ByteStream finalize() {
-    final byteStream = super.finalize();
-    final total = contentLength;
-    int bytes = 0;
-
-    final transformer = StreamTransformer<List<int>, List<int>>.fromHandlers(
-      handleData: (data, sink) {
-        bytes += data.length;
-        onProgress(bytes, total);
-        sink.add(data);
-      },
-    );
-
-    return http.ByteStream(byteStream.transform(transformer));
-  }
-}
 
 class AppLogger {
   static final List<String> logs = [];
@@ -4928,7 +4647,6 @@ class WebviewPlayer {
       
       _localServer!.listen((HttpRequest request) async {
         final path = request.uri.path;
-        final clientIp = request.connectionInfo?.remoteAddress.address ?? 'unknown';
         
         request.response.headers.add('Access-Control-Allow-Origin', '*');
         request.response.headers.add('Access-Control-Allow-Headers', '*');

@@ -85,9 +85,12 @@ class WebRTCManager {
       onStreamStarted?.call();
       
       // Stop stream if user stops sharing from OS UI
-      localStream?.getVideoTracks().first.onEnded = () {
-        stopScreenShare();
-      };
+      final videoTracks = localStream?.getVideoTracks();
+      if (videoTracks != null && videoTracks.isNotEmpty) {
+        videoTracks.first.onEnded = () {
+          stopScreenShare();
+        };
+      }
       
     } catch (e) {
       debugPrint('Error starting screen share: $e');
