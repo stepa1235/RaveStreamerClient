@@ -158,7 +158,7 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
-String globalAppVersion = "1.0.4";
+String globalAppVersion = "1.0.5";
 
 bool isNewerVersion(String latest, String current) {
   try {
@@ -3221,17 +3221,19 @@ class _RoomPageState extends State<RoomPage> {
             child: Row(
               children: [
                 Expanded(
-                  child: Text(
-                    _currentVideoName,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      shadows: [Shadow(blurRadius: 4, color: Colors.black)],
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                  child: (_isLiveStreaming || _currentVideoName == 'No Video Loaded' || _currentVideoUrl.isEmpty)
+                      ? const SizedBox.shrink()
+                      : Text(
+                          _currentVideoName,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            shadows: [Shadow(blurRadius: 4, color: Colors.black)],
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                 ),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),

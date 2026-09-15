@@ -160,7 +160,7 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
-String globalAppVersion = "1.0.4";
+String globalAppVersion = "1.0.5";
 
 bool isNewerVersion(String latest, String current) {
   try {
@@ -2906,11 +2906,21 @@ class _RoomPageState extends State<RoomPage> {
 
       socket.on('connect', () => {
         document.getElementById('status').innerText = 'Подключено к серверу! Нажмите кнопку выше, чтобы выбрать вкладку.';
-        socket.emit('join-room', { roomId, username, password });
+        socket.emit('join-room', { roomId, username, password, isBroadcaster: true });
       });
 
       socket.on('connect_error', (err) => {
         document.getElementById('status').innerText = 'Ошибка подключения к серверу: ' + (err.message || err);
+      });
+
+      socket.on('room-error', (err) => {
+        const msg = (err && err.message) ? err.message : JSON.stringify(err);
+        document.getElementById('status').innerHTML = '<span style="color:#ff4444;font-weight:bold;">Ошибка комнаты: ' + msg + '</span>';
+      });
+
+      socket.on('action-error', (err) => {
+        const msg = (err && err.message) ? err.message : JSON.stringify(err);
+        document.getElementById('status').innerHTML = '<span style="color:#ffaa00;font-weight:bold;">Внимание: ' + msg + '</span>';
       });
 
       document.getElementById('startBtn').onclick = async () => {
@@ -3015,9 +3025,14 @@ class _RoomPageState extends State<RoomPage> {
           
           pc.onicecandidate = (event) => {
             if (event.candidate) {
+              const candObj = event.candidate.toJSON ? event.candidate.toJSON() : {
+                candidate: event.candidate.candidate,
+                sdpMid: event.candidate.sdpMid,
+                sdpMLineIndex: event.candidate.sdpMLineIndex
+              };
               socket.emit('webrtc-ice-candidate', {
                 targetId,
-                candidate: event.candidate,
+                candidate: candObj,
                 roomId
               });
             }
@@ -3028,7 +3043,7 @@ class _RoomPageState extends State<RoomPage> {
 
           socket.emit('webrtc-offer', {
             targetId,
-            offer,
+            offer: { type: offer.type, sdp: offer.sdp },
             roomId
           });
         } catch (err) {
@@ -3351,62 +3366,6 @@ class _RoomPageState extends State<RoomPage> {
                                 ],
                               ),
                             ),
-                          if (_isLocalStreamHost)
-                            Positioned(
-                              top: 16,
-                              left: 16,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                                decoration: BoxDecoration(
-                                  color: Colors.black.withOpacity(0.75),
-                                  borderRadius: BorderRadius.circular(20),
-                                  border: Border.all(color: Colors.redAccent.withOpacity(0.6)),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Container(
-                                      width: 8,
-                                      height: 8,
-                                      decoration: const BoxDecoration(
-                                        color: Colors.redAccent,
-                                        shape: BoxShape.circle,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Text(
-                                      _locale == 'ru' ? 'Вы ведете трансляцию' : 'You are streaming',
-                                      style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
-                                    ),
-                                    const SizedBox(width: 12),
-                                    InkWell(
-                                      onTap: () {
-                                        _socket.emit('stop-stream', {'roomId': widget.roomId});
-                                        try { _localHttpServer?.close(force: true); } catch (_) {}
-                                        _localHttpServer = null;
-                                        if (mounted) {
-                                          setState(() {
-                                            _isLiveStreaming = false;
-                                            _isLocalStreamHost = false;
-                                          });
-                                        }
-                                      },
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                        decoration: BoxDecoration(
-                                          color: Colors.redAccent,
-                                          borderRadius: BorderRadius.circular(10),
-                                        ),
-                                        child: Text(
-                                          _locale == 'ru' ? 'Остановить' : 'Stop',
-                                          style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
                         ],
                         AnimatedOpacity(
                           opacity: _showControls ? 1.0 : 0.0,
@@ -3519,17 +3478,19 @@ class _RoomPageState extends State<RoomPage> {
             child: Row(
               children: [
                 Expanded(
-                  child: Text(
-                    _currentVideoName,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      shadows: [Shadow(blurRadius: 4, color: Colors.black)],
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                  child: (_isLiveStreaming || _currentVideoName == 'No Video Loaded' || _currentVideoUrl.isEmpty)
+                      ? const SizedBox.shrink()
+                      : Text(
+                          _currentVideoName,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            shadows: [Shadow(blurRadius: 4, color: Colors.black)],
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                 ),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),

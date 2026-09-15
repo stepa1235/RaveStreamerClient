@@ -261,7 +261,11 @@ class WebRTCManager {
           final sdpMLineIndex = cData['sdpMLineIndex'] is int 
               ? cData['sdpMLineIndex'] as int 
               : int.tryParse(cData['sdpMLineIndex']?.toString() ?? '');
-          await pc.addCandidate(RTCIceCandidate(cand, sdpMid, sdpMLineIndex));
+          if (cand.isNotEmpty) {
+            try {
+              await pc.addCandidate(RTCIceCandidate(cand, sdpMid, sdpMLineIndex));
+            } catch (_) {}
+          }
         }
         _iceCandidateQueue.remove(senderId);
       }
@@ -307,7 +311,11 @@ class WebRTCManager {
             final sdpMLineIndex = cData['sdpMLineIndex'] is int 
                 ? cData['sdpMLineIndex'] as int 
                 : int.tryParse(cData['sdpMLineIndex']?.toString() ?? '');
-            await pc.addCandidate(RTCIceCandidate(cand, sdpMid, sdpMLineIndex));
+            if (cand.isNotEmpty) {
+              try {
+                await pc.addCandidate(RTCIceCandidate(cand, sdpMid, sdpMLineIndex));
+              } catch (_) {}
+            }
           }
           _iceCandidateQueue.remove(senderId);
         }
@@ -334,7 +342,11 @@ class WebRTCManager {
           final sdpMLineIndex = candidateMap['sdpMLineIndex'] is int 
               ? candidateMap['sdpMLineIndex'] as int 
               : int.tryParse(candidateMap['sdpMLineIndex']?.toString() ?? '');
-          await pc.addCandidate(RTCIceCandidate(cand, sdpMid, sdpMLineIndex));
+          if (cand.isNotEmpty) {
+            try {
+              await pc.addCandidate(RTCIceCandidate(cand, sdpMid, sdpMLineIndex));
+            } catch (_) {}
+          }
         } else {
           _iceCandidateQueue.putIfAbsent(senderId, () => []).add(candidateMap);
         }

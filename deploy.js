@@ -4,7 +4,7 @@ const path = require('path');
 
 const token = process.env.GITHUB_TOKEN || process.env.TOKEN || '';
 const repo = 'stepa1235/RaveStreamerClient';
-const releaseTag = 'v1.0.4';
+const releaseTag = 'v1.0.5';
 
 const headers = {
   'Authorization': `Bearer ${token}`,
@@ -104,7 +104,7 @@ async function deploy() {
   }, JSON.stringify({
     tag_name: releaseTag,
     name: `Luna ${releaseTag}`,
-    body: 'Luna v1.0.4 - Pure WebRTC real-time tab streaming (Kosmi-grade low latency <100ms, 60 FPS, sync audio), eliminated CPU-choking JPEG socket fallback, new neon Luna app icon.'
+    body: 'Luna v1.0.5 - Fixed broadcast join rejection bug on server (allowing broadcaster tab to connect seamlessly), cleaned top-left UI inscriptions, and stabilized WebRTC SDP/ICE exchange for smooth real-time streaming.'
   }));
 
   const uploadUrl = release.upload_url;

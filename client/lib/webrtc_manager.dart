@@ -236,12 +236,21 @@ class WebRTCManager {
         final sdpMLineIndex = cData['sdpMLineIndex'] is int 
             ? cData['sdpMLineIndex'] as int 
             : int.tryParse(cData['sdpMLineIndex']?.toString() ?? '');
-        await pc.addCandidate(RTCIceCandidate(cand, sdpMid, sdpMLineIndex));
+        if (cand.isNotEmpty) {
+          try {
+            await pc.addCandidate(RTCIceCandidate(cand, sdpMid, sdpMLineIndex));
+          } catch (_) {}
+        }
       }
       _iceCandidateQueue.remove(senderId);
     }
     
-    final answer = await pc.createAnswer();
+    final answer = await pc.createAnswer({
+      'mandatory': {
+        'OfferToReceiveAudio': true,
+        'OfferToReceiveVideo': true,
+      },
+    });
     await pc.setLocalDescription(answer);
 
     socket.emit('webrtc-answer', {
@@ -252,57 +261,73 @@ class WebRTCManager {
   }
 
   Future<void> _handleAnswer(dynamic data) async {
-    if (data == null || data is! Map) return;
-    final senderId = data['senderId']?.toString();
-    if (senderId == null) return;
-    final answerData = data['answer'];
-    if (answerData == null || answerData is! Map) return;
-    
-    final pc = peerConnections[senderId];
-    if (pc != null) {
-      final sdp = answerData['sdp']?.toString() ?? '';
-      final type = answerData['type']?.toString() ?? 'answer';
-      await pc.setRemoteDescription(RTCSessionDescription(sdp, type));
+    try {
+      if (data == null || data is! Map) return;
+      final senderId = data['senderId']?.toString();
+      if (senderId == null) return;
+      final answerData = data['answer'];
+      if (answerData == null || answerData is! Map) return;
       
-      _hasRemoteDescription[senderId] = true;
-      if (_iceCandidateQueue.containsKey(senderId)) {
-        for (var cData in _iceCandidateQueue[senderId]!) {
-          final cand = cData['candidate']?.toString() ?? '';
-          final sdpMid = cData['sdpMid']?.toString();
-          final sdpMLineIndex = cData['sdpMLineIndex'] is int 
-              ? cData['sdpMLineIndex'] as int 
-              : int.tryParse(cData['sdpMLineIndex']?.toString() ?? '');
-          await pc.addCandidate(RTCIceCandidate(cand, sdpMid, sdpMLineIndex));
+      final pc = peerConnections[senderId];
+      if (pc != null) {
+        final sdp = answerData['sdp']?.toString() ?? '';
+        final type = answerData['type']?.toString() ?? 'answer';
+        await pc.setRemoteDescription(RTCSessionDescription(sdp, type));
+        
+        _hasRemoteDescription[senderId] = true;
+        if (_iceCandidateQueue.containsKey(senderId)) {
+          for (var cData in _iceCandidateQueue[senderId]!) {
+            final cand = cData['candidate']?.toString() ?? '';
+            final sdpMid = cData['sdpMid']?.toString();
+            final sdpMLineIndex = cData['sdpMLineIndex'] is int 
+                ? cData['sdpMLineIndex'] as int 
+                : int.tryParse(cData['sdpMLineIndex']?.toString() ?? '');
+            if (cand.isNotEmpty) {
+              try {
+                await pc.addCandidate(RTCIceCandidate(cand, sdpMid, sdpMLineIndex));
+              } catch (_) {}
+            }
+          }
+          _iceCandidateQueue.remove(senderId);
         }
-        _iceCandidateQueue.remove(senderId);
       }
+    } catch (e) {
+      debugPrint('Error in _handleAnswer: $e');
     }
   }
 
   Future<void> _handleIceCandidate(dynamic data) async {
-    if (data == null || data is! Map) return;
-    final senderId = data['senderId']?.toString();
-    if (senderId == null) return;
-    final candidateData = data['candidate'];
-    if (candidateData == null || candidateData is! Map) return;
-    
-    final candidateMap = Map<String, dynamic>.from(candidateData);
-    final pc = peerConnections[senderId];
-    if (pc != null) {
-      if (_hasRemoteDescription[senderId] == true) {
-        final cand = candidateMap['candidate']?.toString() ?? '';
-        final sdpMid = candidateMap['sdpMid']?.toString();
-        final sdpMLineIndex = candidateMap['sdpMLineIndex'] is int 
-            ? candidateMap['sdpMLineIndex'] as int 
-            : int.tryParse(candidateMap['sdpMLineIndex']?.toString() ?? '');
-        await pc.addCandidate(RTCIceCandidate(cand, sdpMid, sdpMLineIndex));
+    try {
+      if (data == null || data is! Map) return;
+      final senderId = data['senderId']?.toString();
+      if (senderId == null) return;
+      final candidateData = data['candidate'];
+      if (candidateData == null || candidateData is! Map) return;
+      
+      final candidateMap = Map<String, dynamic>.from(candidateData);
+      final pc = peerConnections[senderId];
+      if (pc != null) {
+        if (_hasRemoteDescription[senderId] == true) {
+          final cand = candidateMap['candidate']?.toString() ?? '';
+          final sdpMid = candidateMap['sdpMid']?.toString();
+          final sdpMLineIndex = candidateMap['sdpMLineIndex'] is int 
+              ? candidateMap['sdpMLineIndex'] as int 
+              : int.tryParse(candidateMap['sdpMLineIndex']?.toString() ?? '');
+          if (cand.isNotEmpty) {
+            try {
+              await pc.addCandidate(RTCIceCandidate(cand, sdpMid, sdpMLineIndex));
+            } catch (_) {}
+          }
+        } else {
+          _iceCandidateQueue.putIfAbsent(senderId, () => []);
+          _iceCandidateQueue[senderId]!.add(candidateMap);
+        }
       } else {
         _iceCandidateQueue.putIfAbsent(senderId, () => []);
         _iceCandidateQueue[senderId]!.add(candidateMap);
       }
-    } else {
-      _iceCandidateQueue.putIfAbsent(senderId, () => []);
-      _iceCandidateQueue[senderId]!.add(candidateMap);
+    } catch (e) {
+      debugPrint('Error in _handleIceCandidate: $e');
     }
   }
 
