@@ -158,7 +158,7 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
-String globalAppVersion = "1.0.3";
+String globalAppVersion = "1.0.4";
 
 bool isNewerVersion(String latest, String current) {
   try {
@@ -1745,7 +1745,6 @@ class _RoomPageState extends State<RoomPage> {
 
   WebRTCManager? _webrtcManager;
   bool _isLiveStreaming = false;
-  Uint8List? _currentLiveFrame;
 
   // App states
   bool _isConnected = false;
@@ -1953,15 +1952,11 @@ class _RoomPageState extends State<RoomPage> {
       if (mounted) {
         setState(() {
           _isLiveStreaming = true;
-          _currentLiveFrame = null;
         });
       }
     };
     _webrtcManager!.onRenderUpdated = () {
       if (mounted) {
-        if (_webrtcManager != null && _webrtcManager!.isPeerConnected && _currentLiveFrame != null) {
-          _currentLiveFrame = null;
-        }
         setState(() {});
       }
     };
@@ -2179,7 +2174,6 @@ class _RoomPageState extends State<RoomPage> {
       if (isLive) {
         setState(() {
           _isLiveStreaming = true;
-          _currentLiveFrame = null;
         });
         _triggerControlsVisibility();
         _socket.emit('new-viewer', {'roomId': widget.roomId, 'viewerId': _socket.id});
@@ -2192,7 +2186,6 @@ class _RoomPageState extends State<RoomPage> {
       if (mounted) {
         setState(() {
           _isLiveStreaming = true;
-          _currentLiveFrame = null;
         });
         _triggerControlsVisibility();
         _socket.emit('new-viewer', {'roomId': widget.roomId, 'viewerId': _socket.id});
@@ -2203,7 +2196,6 @@ class _RoomPageState extends State<RoomPage> {
       if (mounted) {
         setState(() {
           _isLiveStreaming = false;
-          _currentLiveFrame = null;
         });
         _webrtcManager?.clearRemoteStream();
         try { _mkPlayer?.setVolume(100); } catch (_) {}
@@ -2222,33 +2214,6 @@ class _RoomPageState extends State<RoomPage> {
           behavior: SnackBarBehavior.floating,
         ),
       );
-    });
-
-    _socket.on('live-frame', (data) {
-      if (!mounted) return;
-      // Do not waste CPU decoding JPEGs if WebRTC is already connected
-      if (_webrtcManager != null && _webrtcManager!.isPeerConnected) {
-        if (_currentLiveFrame != null) {
-          setState(() { _currentLiveFrame = null; });
-        }
-        return;
-      }
-      try {
-        Uint8List? bytes;
-        if (data is Uint8List) {
-          bytes = data;
-        } else if (data is List) {
-          bytes = Uint8List.fromList(data.cast<int>());
-        } else if (data is Map && data['data'] is List) {
-          bytes = Uint8List.fromList((data['data'] as List).cast<int>());
-        }
-        if (bytes != null && bytes.isNotEmpty) {
-          setState(() {
-            _currentLiveFrame = bytes;
-            _isLiveStreaming = true;
-          });
-        }
-      } catch (_) {}
     });
 
     // Handle video change event
@@ -3150,12 +3115,6 @@ class _RoomPageState extends State<RoomPage> {
                             RTCVideoView(
                               _webrtcManager!.remoteRenderer,
                               objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
-                            )
-                          else if (_currentLiveFrame != null)
-                            Image.memory(
-                              _currentLiveFrame!,
-                              fit: BoxFit.contain,
-                              gaplessPlayback: true,
                             )
                           else
                             Center(

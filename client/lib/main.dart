@@ -160,7 +160,7 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
-String globalAppVersion = "1.0.3";
+String globalAppVersion = "1.0.4";
 
 bool isNewerVersion(String latest, String current) {
   try {
@@ -1446,7 +1446,6 @@ class _RoomPageState extends State<RoomPage> {
   WebRTCManager? _webrtcManager;
   HttpServer? _localHttpServer;
   bool _isLiveStreaming = false;
-  Uint8List? _currentLiveFrame;
   List<dynamic> _queue = [];
   String _preferredQuality = 'Auto';
   List<dynamic> _translators = [];
@@ -1661,7 +1660,6 @@ class _RoomPageState extends State<RoomPage> {
       if (mounted) {
         setState(() {
           _isLiveStreaming = true;
-          _currentLiveFrame = null;
         });
       }
       if (_isHost && _webrtcManager != null) {
@@ -1675,9 +1673,6 @@ class _RoomPageState extends State<RoomPage> {
     };
     _webrtcManager!.onRenderUpdated = () {
       if (mounted) {
-        if (_webrtcManager != null && _webrtcManager!.isPeerConnected && _currentLiveFrame != null) {
-          _currentLiveFrame = null;
-        }
         setState(() {});
       }
     };
@@ -1690,7 +1685,6 @@ class _RoomPageState extends State<RoomPage> {
       if (mounted) {
         setState(() {
           _isLiveStreaming = true;
-          _currentLiveFrame = null;
         });
         _triggerControlsVisibility();
         _socket.emit('new-viewer', {'roomId': widget.roomId, 'viewerId': _socket.id});
@@ -1701,36 +1695,9 @@ class _RoomPageState extends State<RoomPage> {
         setState(() {
           _isLiveStreaming = false;
           _isLocalStreamHost = false;
-          _currentLiveFrame = null;
         });
         _webrtcManager?.clearRemoteStream();
       }
-    });
-
-    _socket.on('live-frame', (data) {
-      if (!mounted) return;
-      if (_webrtcManager != null && _webrtcManager!.isPeerConnected) {
-        if (_currentLiveFrame != null) {
-          setState(() { _currentLiveFrame = null; });
-        }
-        return;
-      }
-      try {
-        Uint8List? bytes;
-        if (data is Uint8List) {
-          bytes = data;
-        } else if (data is List) {
-          bytes = Uint8List.fromList(data.cast<int>());
-        } else if (data is Map && data['data'] is List) {
-          bytes = Uint8List.fromList((data['data'] as List).cast<int>());
-        }
-        if (bytes != null && bytes.isNotEmpty) {
-          setState(() {
-            _currentLiveFrame = bytes;
-            _isLiveStreaming = true;
-          });
-        }
-      } catch (_) {}
     });
 
     _socket.onConnect((_) {
@@ -1949,7 +1916,6 @@ class _RoomPageState extends State<RoomPage> {
       if (isLive) {
         setState(() {
           _isLiveStreaming = true;
-          _currentLiveFrame = null;
         });
         _triggerControlsVisibility();
         _socket.emit('new-viewer', {'roomId': widget.roomId, 'viewerId': _socket.id});
@@ -1962,7 +1928,6 @@ class _RoomPageState extends State<RoomPage> {
       if (mounted) {
         setState(() {
           _isLiveStreaming = true;
-          _currentLiveFrame = null;
         });
         _triggerControlsVisibility();
       }
@@ -2980,58 +2945,7 @@ class _RoomPageState extends State<RoomPage> {
           }
           document.getElementById('startBtn').style.display = 'none';
 
-          // Lightweight preview / fallback frame broadcaster (640x360, 3 FPS)
-          // When WebRTC P2P is connected, it pauses to save 100% bandwidth
-          const videoTrack = localStream.getVideoTracks()[0];
-          const canvas = document.createElement('canvas');
-          canvas.width = 640;
-          canvas.height = 360;
-          const ctx = canvas.getContext('2d');
-          let isCapturing = false;
-
-          let frameInterval = setInterval(async () => {
-            if (!localStream || !localStream.active || !videoTrack || videoTrack.readyState !== 'live' || isCapturing) return;
-
-            // Check if any peer is connected via WebRTC
-            let hasP2P = false;
-            for (const pc of Object.values(peerConnections)) {
-              if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed' || pc.connectionState === 'connected') {
-                hasP2P = true;
-                break;
-              }
-            }
-            // If WebRTC is active, only send occasional 1-frame preview every 3 seconds
-            if (hasP2P && (Date.now() % 3000 > 350)) {
-              return;
-            }
-
-            isCapturing = true;
-            try {
-              let frameBitmap;
-              if (typeof createImageBitmap === 'function') {
-                try { frameBitmap = await createImageBitmap(videoTrack); } catch (_) {}
-              }
-              if (frameBitmap) {
-                ctx.drawImage(frameBitmap, 0, 0, canvas.width, canvas.height);
-                try { frameBitmap.close(); } catch (_) {}
-              } else if (prevEl.videoWidth > 0) {
-                ctx.drawImage(prevEl, 0, 0, canvas.width, canvas.height);
-              }
-              canvas.toBlob((blob) => {
-                isCapturing = false;
-                if (blob && blob.size > 0) {
-                  blob.arrayBuffer().then((buffer) => {
-                    socket.emit('live-frame', { roomId, frame: buffer });
-                  });
-                }
-              }, 'image/jpeg', 0.4);
-            } catch (e) {
-              isCapturing = false;
-            }
-          }, 300);
-
           localStream.getVideoTracks()[0].onended = () => {
-            if (frameInterval) clearInterval(frameInterval);
             socket.emit('stop-stream', { roomId });
             document.getElementById('status').innerText = 'Трансляция завершена.';
           };
@@ -3399,7 +3313,7 @@ class _RoomPageState extends State<RoomPage> {
                         // Background audio/video player (always mounted so live audio stream plays for viewers)
                         if (_playerReady && _mkPlayer != null && _mkPlayer!.controller.value.isInitialized)
                           Offstage(
-                            offstage: _isLiveStreaming && (_webrtcManager?.isPeerConnected == true || _currentLiveFrame != null),
+                            offstage: _isLiveStreaming,
                             child: Webview(_mkPlayer!.controller),
                           )
                         else
@@ -3409,7 +3323,7 @@ class _RoomPageState extends State<RoomPage> {
                             ),
                           ),
 
-                        // Live video stream overlay (WebRTC or Frame buffer)
+                        // Live video stream overlay (WebRTC)
                         if (_isLiveStreaming) ...[
                           if (_webrtcManager != null &&
                               _webrtcManager!.isPeerConnected &&
@@ -3418,12 +3332,6 @@ class _RoomPageState extends State<RoomPage> {
                             RTCVideoView(
                               _webrtcManager!.remoteRenderer,
                               objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
-                            )
-                          else if (_currentLiveFrame != null)
-                            Image.memory(
-                              _currentLiveFrame!,
-                              fit: BoxFit.contain,
-                              gaplessPlayback: true,
                             )
                           else if (_isLocalStreamHost)
                             _buildHostStreamBanner()
@@ -3443,7 +3351,7 @@ class _RoomPageState extends State<RoomPage> {
                                 ],
                               ),
                             ),
-                          if (_isLocalStreamHost && (_currentLiveFrame != null || (_webrtcManager?.isPeerConnected ?? false)))
+                          if (_isLocalStreamHost)
                             Positioned(
                               top: 16,
                               left: 16,
@@ -3480,7 +3388,6 @@ class _RoomPageState extends State<RoomPage> {
                                           setState(() {
                                             _isLiveStreaming = false;
                                             _isLocalStreamHost = false;
-                                            _currentLiveFrame = null;
                                           });
                                         }
                                       },
