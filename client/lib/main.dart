@@ -3625,8 +3625,7 @@ class _RoomPageState extends State<RoomPage> {
                         // Live video stream overlay (WebRTC)
                         if (_isLiveStreaming) ...[
                           if (_webrtcManager != null &&
-                              _webrtcManager!.remoteRenderer.srcObject != null &&
-                              _webrtcManager!.remoteRenderer.textureId != null)
+                              _webrtcManager!.remoteRenderer.srcObject != null)
                             RTCVideoView(
                               _webrtcManager!.remoteRenderer,
                               objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
@@ -3696,11 +3695,7 @@ class _RoomPageState extends State<RoomPage> {
             if (Platform.isWindows && _isHost) ...[
               const SizedBox(height: 24),
               ElevatedButton.icon(
-                onPressed: () {
-                  setState(() { _isLiveStreaming = true; });
-                  _socket.emit('start-stream', {'roomId': widget.roomId});
-                  _startBrowserBroadcast();
-                },
+                onPressed: _startBrowserBroadcast,
                 icon: const Icon(Icons.tab, size: 20),
                 label: Text(
                   _locale == 'ru' ? 'Запустить трансляцию вкладки' : 'Start Tab Broadcast',
@@ -4292,11 +4287,7 @@ class _RoomPageState extends State<RoomPage> {
                     )
                   else
                     ElevatedButton.icon(
-                      onPressed: () {
-                        setState(() { _isLiveStreaming = true; });
-                        _socket.emit('start-stream', {'roomId': widget.roomId});
-                        _startBrowserBroadcast();
-                      },
+                      onPressed: _startBrowserBroadcast,
                       icon: const Icon(Icons.tab, size: 18),
                       label: Text(
                         _locale == 'ru' ? 'Запустить трансляцию из вкладки' : 'Start Tab Stream',
