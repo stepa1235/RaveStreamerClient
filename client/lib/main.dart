@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -120,7 +121,17 @@ const Map<String, Map<String, String>> _localizedValues = {
 
 Future<String> _getSettingsPath() async {
   if (Platform.isWindows) {
-    return 'C:\\RaveStreamer\\settings.json';
+    final dir = await getApplicationSupportDirectory();
+    final newPath = '${dir.path}${Platform.pathSeparator}ravestreamer_settings.json';
+    final legacyFile = File('C:\\RaveStreamer\\settings.json');
+    final newFile = File(newPath);
+    if (!await newFile.exists() && await legacyFile.exists()) {
+      try {
+        await newFile.parent.create(recursive: true);
+        await legacyFile.copy(newPath);
+      } catch (_) {}
+    }
+    return newPath;
   }
   // Android / other platforms
   final dir = await getApplicationDocumentsDirectory();
@@ -129,12 +140,11 @@ Future<String> _getSettingsPath() async {
 
 Future<void> saveSettings(Map<String, dynamic> settings) async {
   try {
-    if (Platform.isWindows) {
-      final dir = Directory('C:\\RaveStreamer');
-      if (!await dir.exists()) await dir.create(recursive: true);
-    }
     final path = await _getSettingsPath();
     final file = File(path);
+    if (!await file.parent.exists()) {
+      await file.parent.create(recursive: true);
+    }
     Map<String, dynamic> existing = {};
     if (await file.exists()) {
       try { existing = jsonDecode(await file.readAsString()) as Map<String, dynamic>; } catch(_) {}
@@ -160,7 +170,7 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
-String globalAppVersion = "1.0.5";
+String globalAppVersion = "1.0.6";
 
 bool isNewerVersion(String latest, String current) {
   try {
@@ -241,6 +251,14 @@ Future<void> downloadAndInstallUpdateWindows(BuildContext context, String downlo
   );
 
   try {
+    final uri = Uri.tryParse(downloadUrl);
+    if (uri == null ||
+        uri.scheme != 'https' ||
+        uri.host != 'github.com' ||
+        !uri.path.startsWith('/stepa1235/RaveStreamerClient/releases/download/')) {
+      throw Exception('Untrusted update URL: $downloadUrl');
+    }
+
     final tempDir = Directory.systemTemp;
     final zipPath = '${tempDir.path}\\RaveStreamer_Update.zip';
     final zipFile = File(zipPath);
@@ -252,7 +270,7 @@ Future<void> downloadAndInstallUpdateWindows(BuildContext context, String downlo
       });
     }
 
-    final req = http.Request('GET', Uri.parse(downloadUrl));
+    final req = http.Request('GET', uri);
     final res = await http.Client().send(req);
     final contentLength = res.contentLength ?? 0;
     
@@ -276,6 +294,10 @@ Future<void> downloadAndInstallUpdateWindows(BuildContext context, String downlo
     await sink.flush();
     await sink.close();
 
+    if (downloaded < 100000) {
+      throw Exception('Downloaded update is too small ($downloaded bytes). Possibly corrupted.');
+    }
+
     if (dialogSetState != null) {
       dialogSetState!(() {
         isDownloading = false;
@@ -288,22 +310,25 @@ Future<void> downloadAndInstallUpdateWindows(BuildContext context, String downlo
     final scriptPath = '${tempDir.path}\\update_rave.ps1';
     final currentExe = Platform.resolvedExecutable;
     final exeDir = File(currentExe).parent.path;
+    final safeZip = zipPath.replaceAll("'", "''");
+    final safeDest = exeDir.replaceAll("'", "''");
+    final safeExe = currentExe.replaceAll("'", "''");
     
     final psScript = '''
 Start-Sleep -Seconds 2
-\$zip = "$zipPath"
-\$dest = "$exeDir"
-\$exe = "$currentExe"
+\$zip = '$safeZip'
+\$dest = '$safeDest'
+\$exe = '$safeExe'
 for (\$i = 0; \$i -lt 10; \$i++) {
     try {
-        Expand-Archive -Path \$zip -DestinationPath \$dest -Force -ErrorAction Stop
+        Expand-Archive -LiteralPath \$zip -DestinationPath \$dest -Force -ErrorAction Stop
         break
     } catch {
         Start-Sleep -Seconds 1
     }
 }
-Remove-Item -Path \$zip -Force -ErrorAction SilentlyContinue
-Start-Process \$exe
+Remove-Item -LiteralPath \$zip -Force -ErrorAction SilentlyContinue
+Start-Process -FilePath \$exe
 ''';
     await File(scriptPath).writeAsString(psScript);
     
@@ -343,7 +368,7 @@ void main() async {
       await localNotifier.setup(appName: 'RaveStreamer');
     try {
       await WebviewController.initializeEnvironment(
-        additionalArguments: '--disable-web-security --autoplay-policy=no-user-gesture-required',
+        additionalArguments: '--autoplay-policy=no-user-gesture-required',
       );
       debugPrint('[webview] Environment initialized in main()');
     } catch (e) {
@@ -416,8 +441,17 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
   String _savedServerUrl = 'http://luna.lumigrid.ru:3000';
   bool _isLoading = true;
   
-  // Unique client ID generated in memory at app startup to resolve localhost username collision
-  final String _clientId = 'client_${DateTime.now().microsecondsSinceEpoch}_${(1000 + (DateTime.now().millisecond % 9000))}';
+  // Cryptographically secure unique client ID (UUID v4)
+  static String _generateSecureClientId() {
+    final random = Random.secure();
+    final values = List<int>.generate(16, (i) => random.nextInt(256));
+    values[6] = (values[6] & 0x0f) | 0x40; // RFC 4122 v4
+    values[8] = (values[8] & 0x3f) | 0x80; // RFC 4122 variant
+    final hex = values.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20, 32)}';
+  }
+
+  late final String _clientId = _generateSecureClientId();
 
   @override
   void initState() {
@@ -754,6 +788,19 @@ class _ConnectionPageState extends State<ConnectionPage> {
         serverUrl.contains('127.0.0.1')) {
       serverUrl = 'http://luna.lumigrid.ru:3000';
       _serverController.text = serverUrl;
+    }
+
+    final parsedUri = Uri.tryParse(serverUrl);
+    if (parsedUri == null ||
+        (!parsedUri.isScheme('http') && !parsedUri.isScheme('https')) ||
+        parsedUri.host.isEmpty) {
+      setState(() {
+        _isConnecting = false;
+        _errorMessage = widget.locale == 'ru'
+            ? 'Некорректный адрес сервера (http:// или https://)'
+            : 'Invalid server URL (must be http:// or https://)';
+      });
+      return;
     }
 
     // Save connection settings immediately so nickname persists
@@ -1459,11 +1506,6 @@ class _RoomPageState extends State<RoomPage> {
         if (u['id'] == _socket.id && u['isHost'] == true) return true;
       }
     }
-    if (_hostUsername != null && _hostUsername!.isNotEmpty) {
-      final myName = widget.username.trim().toLowerCase();
-      if (myName == _hostUsername!.toLowerCase()) return true;
-    }
-    if (_hostUsername == null && _users.isNotEmpty && _users[0]['id'] == _socket.id) return true;
     return false;
   }
   
@@ -1687,7 +1729,10 @@ class _RoomPageState extends State<RoomPage> {
           _isLiveStreaming = true;
         });
         _triggerControlsVisibility();
-        _socket.emit('new-viewer', {'roomId': widget.roomId, 'viewerId': _socket.id});
+        try { _mkPlayer?.pause(); } catch (_) {}
+        if (!_isLocalStreamHost) {
+          _socket.emit('new-viewer', {'roomId': widget.roomId, 'viewerId': _socket.id});
+        }
       }
     });
     _socket.on('stream-stopped', (_) {
@@ -1697,6 +1742,11 @@ class _RoomPageState extends State<RoomPage> {
           _isLocalStreamHost = false;
         });
         _webrtcManager?.clearRemoteStream();
+        try { _localHttpServer?.close(force: true); } catch (_) {}
+        _localHttpServer = null;
+        try { _mkPlayer?.setVolume(100); } catch (_) {}
+        try { _mkPlayer?.open(Media('')); } catch (_) {}
+        try { _mkPlayer?.pause(); } catch (_) {}
       }
     });
 
@@ -1705,6 +1755,8 @@ class _RoomPageState extends State<RoomPage> {
       setState(() {
         _isConnected = true;
       });
+      // Request ICE servers dynamically
+      _socket.emit('get-ice-servers', {'roomId': widget.roomId});
       // Join the specified room
       _socket.emit('join-room', {
         'roomId': widget.roomId,
@@ -1895,14 +1947,15 @@ class _RoomPageState extends State<RoomPage> {
     // Handle initial room state when joining
     _socket.on('room-state', (data) {
       if (_isDisposed || !mounted) return;
-      final videoUrl = data['videoUrl'] as String;
-      final videoName = data['videoName'] as String;
-      final isPlaying = data['isPlaying'] as bool;
-      final calculatedTime = (data['calculatedTime'] as num).toDouble();
-      final queueData = data['queue'] as List<dynamic>? ?? [];
-      final headers = data['headers'] as Map<String, dynamic>?;
-      final isLive = data['isLiveStreaming'] as bool? ?? false;
-      final hostUser = data['hostUsername'] as String?;
+      if (data is! Map) return;
+      final videoUrl = data['videoUrl']?.toString() ?? '';
+      final videoName = data['videoName']?.toString() ?? 'No Video Loaded';
+      final isPlaying = data['isPlaying'] == true;
+      final calculatedTime = (data['calculatedTime'] is num) ? (data['calculatedTime'] as num).toDouble() : 0.0;
+      final queueData = data['queue'] is List ? (data['queue'] as List<dynamic>) : <dynamic>[];
+      final headers = data['headers'] is Map ? Map<String, dynamic>.from(data['headers'] as Map) : null;
+      final isLive = data['isLiveStreaming'] == true;
+      final hostUser = data['hostUsername']?.toString();
 
       setState(() {
         _hasJoinedRoom = true;
@@ -1918,32 +1971,12 @@ class _RoomPageState extends State<RoomPage> {
           _isLiveStreaming = true;
         });
         _triggerControlsVisibility();
-        _socket.emit('new-viewer', {'roomId': widget.roomId, 'viewerId': _socket.id});
+        try { _mkPlayer?.pause(); } catch (_) {}
+        if (!_isLocalStreamHost) {
+          _socket.emit('new-viewer', {'roomId': widget.roomId, 'viewerId': _socket.id});
+        }
       } else if (videoUrl.isNotEmpty) {
         _setupVideoPlayer(videoUrl, videoName, startPlaying: isPlaying, startSeconds: calculatedTime, headers: headers);
-      }
-    });
-
-    _socket.on('stream-started', (_) {
-      if (mounted) {
-        setState(() {
-          _isLiveStreaming = true;
-        });
-        _triggerControlsVisibility();
-      }
-    });
-
-    _socket.on('stream-stopped', (_) {
-      if (mounted) {
-        setState(() {
-          _isLiveStreaming = false;
-          _isLocalStreamHost = false;
-        });
-        try { _localHttpServer?.close(force: true); } catch (_) {}
-        _localHttpServer = null;
-        try { _mkPlayer?.setVolume(100); } catch (_) {}
-        try { _mkPlayer?.open(Media('')); } catch (_) {}
-        try { _mkPlayer?.pause(); } catch (_) {}
       }
     });
 
@@ -1962,9 +1995,10 @@ class _RoomPageState extends State<RoomPage> {
     // Handle video change event
     _socket.on('video-changed', (data) {
       if (_isDisposed || !mounted) return;
-      final videoUrl = data['videoUrl'] as String? ?? '';
-      final videoName = data['videoName'] as String? ?? 'No Video Loaded';
-      final headers = data['headers'] as Map<String, dynamic>?;
+      if (data is! Map) return;
+      final videoUrl = data['videoUrl']?.toString() ?? '';
+      final videoName = data['videoName']?.toString() ?? 'No Video Loaded';
+      final headers = data['headers'] is Map ? Map<String, dynamic>.from(data['headers'] as Map) : null;
       
       if (videoUrl.isEmpty) {
         try { _mkPlayer?.open(Media('')); } catch (_) {}
@@ -1987,23 +2021,30 @@ class _RoomPageState extends State<RoomPage> {
     _socket.on('queue-updated', (data) {
       if (_isDisposed || !mounted) return;
       setState(() {
-        _queue = data['queue'] as List<dynamic>;
+        if (data is Map && data['queue'] is List) {
+          _queue = data['queue'] as List<dynamic>;
+        } else if (data is List) {
+          _queue = data;
+        } else {
+          _queue = [];
+        }
       });
     });
 
     // Handle Chat Message Broadcast
     _socket.on('chat-msg', (data) {
       if (_isDisposed || !mounted) return;
+      if (data is! Map) return;
       
-      final sender = data['username'] as String;
-      final text = data['text'] as String;
+      final sender = data['username']?.toString() ?? 'Unknown';
+      final text = data['text']?.toString() ?? '';
       
       setState(() {
         _messages.add({
-          'clientId': (data['clientId'] ?? '') as String,
+          'clientId': (data['clientId'] ?? '').toString(),
           'sender': sender,
           'text': text,
-          'time': (data['timestamp'] ?? data['time'] ?? '') as String,
+          'time': (data['timestamp'] ?? data['time'] ?? '').toString(),
         });
       });
       
@@ -2040,45 +2081,49 @@ class _RoomPageState extends State<RoomPage> {
     // Handle remote play event
     _socket.on('played', (data) {
       if (_isDisposed || !mounted) return;
-      final time = (data['time'] as num).toDouble();
+      final time = (data is Map && data['time'] is num) ? (data['time'] as num).toDouble() : 0.0;
       _handleRemotePlay(time);
     });
 
     // Handle remote pause event
     _socket.on('paused', (data) {
       if (_isDisposed || !mounted) return;
-      final time = (data['time'] as num).toDouble();
+      final time = (data is Map && data['time'] is num) ? (data['time'] as num).toDouble() : 0.0;
       _handleRemotePause(time);
     });
 
     // Handle remote seek event
     _socket.on('seeked', (data) {
       if (_isDisposed || !mounted) return;
-      final time = (data['time'] as num).toDouble();
+      final time = (data is Map && data['time'] is num) ? (data['time'] as num).toDouble() : 0.0;
       _handleRemoteSeek(time);
     });
 
     // Handle continuous background sync
     _socket.on('sync-state-broadcast', (data) {
       if (_isDisposed || !mounted) return;
-      final isPlaying = data['isPlaying'] as bool;
-      final currentTime = (data['currentTime'] as num).toDouble();
+      if (data is! Map) return;
+      final isPlaying = data['isPlaying'] == true;
+      final currentTime = (data['currentTime'] is num) ? (data['currentTime'] as num).toDouble() : 0.0;
       _handlePeriodicSync(isPlaying, currentTime);
     });
 
     // Handle Chat History (e.g. on rejoin/reconnect)
     _socket.on('chat-history', (data) {
       if (_isDisposed || !mounted) return;
-      final history = data as List<dynamic>;
+      if (data is! List) return;
+      final history = data;
       setState(() {
         _messages.clear();
         for (final msg in history) {
-          _messages.add({
-            'clientId': (msg['clientId'] ?? '') as String,
-            'sender': msg['username'] as String,
-            'text': msg['text'] as String,
-            'time': (msg['timestamp'] ?? msg['time'] ?? '') as String,
-          });
+          if (msg is Map) {
+            _messages.add({
+              'clientId': (msg['clientId'] ?? '').toString(),
+              'sender': (msg['username'] ?? 'Unknown').toString(),
+              'text': (msg['text'] ?? '').toString(),
+              'time': (msg['timestamp'] ?? msg['time'] ?? '').toString(),
+            });
+          }
         }
       });
       // Scroll to bottom
@@ -2142,10 +2187,15 @@ class _RoomPageState extends State<RoomPage> {
     });
   }
 
+  int _lastChatSentMs = 0;
+
   // Send chat message
   void _sendChatMessage() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now - _lastChatSentMs < 300) return; // Rate limit: max 1 message per 300ms
+    _lastChatSentMs = now;
     final text = _chatInputController.text.trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty || text.length > 500) return;
     _socket.emit('chat-msg', {
       'roomId': widget.roomId,
       'username': widget.username,
@@ -2273,7 +2323,15 @@ class _RoomPageState extends State<RoomPage> {
     }
 
     if (_isDisposed || !mounted) return;
-    debugPrint('[media_kit] Opening: $playUrl');
+    final sanitizedLogUrl = () {
+      try {
+        final uri = Uri.parse(playUrl);
+        return '${uri.scheme}://${uri.host}${uri.path}';
+      } catch (_) {
+        return '<url>';
+      }
+    }();
+    debugPrint('[media_kit] Opening: $sanitizedLogUrl');
 
     final player = _mkPlayer;
     if (player == null) return;
@@ -2310,24 +2368,29 @@ class _RoomPageState extends State<RoomPage> {
       
       if (!File(ytDlp).existsSync()) {
         debugPrint('Downloading yt-dlp.exe to $ytDlp');
-        if (mounted) {
-          /* SnackBar disabled */
+        final dlpUri = Uri.parse('https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp.exe');
+        if (dlpUri.host != 'github.com' || !dlpUri.path.startsWith('/yt-dlp/')) {
+          throw Exception('Untrusted yt-dlp source');
         }
-        final response = await http.get(Uri.parse('https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp.exe'));
-        await File(ytDlp).writeAsBytes(response.bodyBytes);
+        final response = await http.get(dlpUri);
+        if (response.statusCode == 200 && response.bodyBytes.length > 500000) {
+          await File(ytDlp).writeAsBytes(response.bodyBytes);
+        } else {
+          throw Exception('Failed to download valid yt-dlp binary');
+        }
       }
       
       debugPrint('Running local yt-dlp with Chrome cookies...');
-      var result = await Process.run(ytDlp, ['--dump-json', '-f', 'b[ext=mp4]/b/best', '--no-warnings', '--no-check-certificate', '--extractor-args', 'youtube:player_client=ios', '--cookies-from-browser', 'chrome', youtubeUrl]);
+      var result = await Process.run(ytDlp, ['--dump-json', '-f', 'b[ext=mp4]/b/best', '--no-warnings', '--extractor-args', 'youtube:player_client=ios', '--cookies-from-browser', 'chrome', youtubeUrl]);
       
       if (result.exitCode != 0) {
         debugPrint('Chrome cookies failed, trying Edge cookies...');
-        result = await Process.run(ytDlp, ['--dump-json', '-f', 'b[ext=mp4]/b/best', '--no-warnings', '--no-check-certificate', '--extractor-args', 'youtube:player_client=ios', '--cookies-from-browser', 'edge', youtubeUrl]);
+        result = await Process.run(ytDlp, ['--dump-json', '-f', 'b[ext=mp4]/b/best', '--no-warnings', '--extractor-args', 'youtube:player_client=ios', '--cookies-from-browser', 'edge', youtubeUrl]);
       }
       
       if (result.exitCode != 0) {
         debugPrint('Cookies failed, trying without cookies...');
-        result = await Process.run(ytDlp, ['--dump-json', '-f', 'b[ext=mp4]/b/best', '--no-warnings', '--no-check-certificate', '--extractor-args', 'youtube:player_client=ios', youtubeUrl]);
+        result = await Process.run(ytDlp, ['--dump-json', '-f', 'b[ext=mp4]/b/best', '--no-warnings', '--extractor-args', 'youtube:player_client=ios', youtubeUrl]);
       }
       
       if (result.exitCode == 0) {
@@ -2720,6 +2783,7 @@ class _RoomPageState extends State<RoomPage> {
     });
   }
 
+  int _lastSeekSentMs = 0;
   void _localSeek(double seconds) {
     if (!_isHost) return;
     if (_mkPlayer == null) return;
@@ -2727,6 +2791,9 @@ class _RoomPageState extends State<RoomPage> {
     _mkPlayer!.seek(Duration(milliseconds: (seconds * 1000).toInt())).then((_) {
       _isIncomingUpdate = false;
     });
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now - _lastSeekSentMs < 100) return; // Rate limit: max 10 seek emits/sec
+    _lastSeekSentMs = now;
     _socket.emit('seek', {
       'roomId': widget.roomId,
       'time': seconds,
@@ -2815,6 +2882,7 @@ class _RoomPageState extends State<RoomPage> {
       try { await _localHttpServer?.close(force: true); } catch (_) {}
       _localHttpServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       final port = _localHttpServer!.port;
+      final hostAppSocketId = _socket.id;
       final rawServerUrl = widget.serverUrl.isEmpty ? 'http://127.0.0.1:3000' : widget.serverUrl;
       final serverUrl = rawServerUrl
           .replaceAll('wss://', 'https://')
@@ -2851,7 +2919,7 @@ class _RoomPageState extends State<RoomPage> {
     .warning { background-color: #ff4444; padding: 15px; border-radius: 8px; font-weight: bold; margin: 15px 0; max-width: 600px; }
     button { background: linear-gradient(90deg, #00F2FE 0%, #4FACFE 100%); color: #161426; font-weight: bold; border: none; padding: 15px 30px; font-size: 18px; border-radius: 30px; cursor: pointer; transition: transform 0.2s; }
     button:hover { transform: scale(1.05); }
-    video { max-width: 80%; border: 2px solid #00F2FE; border-radius: 8px; margin-top: 20px; }
+    video { max-width: 320px; border: 2px solid #00F2FE; border-radius: 8px; margin-top: 20px; }
   </style>
 </head>
 <body>
@@ -2872,34 +2940,35 @@ class _RoomPageState extends State<RoomPage> {
     if (typeof io === 'undefined') {
       document.getElementById('status').innerHTML = '<span style="color:#ff4444;font-weight:bold;">Ошибка: Socket.IO библиотека не загрузилась.<br>Проверьте соединение с сервером или обновите страницу.</span>';
     } else {
-      const socket = io('$serverUrl', {
+      const socket = io(${jsonEncode(serverUrl)}, {
         extraHeaders: { 'bypass-tunnel-reminder': 'true' },
         query: { 'bypass-tunnel-reminder': 'true' },
         transports: ['websocket']
       });
 
-      const roomId = '${widget.roomId}';
-      const password = '${widget.password ?? ''}';
-      const username = '${widget.username}\u200B';
+      const roomId = ${jsonEncode(widget.roomId)};
+      const password = ${jsonEncode(widget.password ?? '')};
+      const username = ${jsonEncode('${widget.username}\u200B')};
+      const hostAppSocketId = ${jsonEncode(hostAppSocketId)};
       let localStream;
       let peerConnections = {};
       let latestUsers = [];
+      const offerLocks = {};
 
-      const config = {
+      let config = {
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
-          { urls: 'stun:195.133.26.226:3478' },
-          {
-            urls: [
-              'turn:195.133.26.226:3478?transport=udp',
-              'turn:195.133.26.226:3478?transport=tcp'
-            ],
-            username: 'luna',
-            credential: 'luna2026secret'
-          }
+          { urls: 'stun:195.133.26.226:3478' }
         ]
       };
+
+      socket.on('ice-servers', (servers) => {
+        if (Array.isArray(servers) && servers.length > 0) {
+          config.iceServers = servers;
+        }
+      });
+      socket.emit('get-ice-servers', { roomId });
 
       let iceCandidateQueue = {};
       let hasRemoteDescription = {};
@@ -2907,6 +2976,7 @@ class _RoomPageState extends State<RoomPage> {
       socket.on('connect', () => {
         document.getElementById('status').innerText = 'Подключено к серверу! Нажмите кнопку выше, чтобы выбрать вкладку.';
         socket.emit('join-room', { roomId, username, password, isBroadcaster: true });
+        socket.emit('get-ice-servers', { roomId });
       });
 
       socket.on('connect_error', (err) => {
@@ -2941,15 +3011,23 @@ class _RoomPageState extends State<RoomPage> {
             systemAudio: "include"
           });
           
+          // Mark video track as motion to prevent Chrome from queueing frames and causing massive latency
+          localStream.getVideoTracks().forEach(track => {
+            if ('contentHint' in track) {
+              track.contentHint = 'motion';
+            }
+          });
+
           const prevEl = document.getElementById('preview');
           prevEl.srcObject = localStream;
           prevEl.muted = true;
           prevEl.volume = 0;
+          prevEl.style.display = 'block';
           try { await prevEl.play(); } catch (_) {}
           
           const hasAudio = localStream.getAudioTracks().length > 0;
           if (hasAudio) {
-            document.getElementById('status').innerHTML = '<span style="color:#00FF66;font-weight:bold;font-size:18px;">✅ ТРАНСЛЯЦИЯ АКТИВНА (Видео + Звук)!</span><br><p style="color:#aaa;margin-top:8px;">Звук и видео успешно передаются. Теперь вы можете свернуть это окно браузера.</p>';
+            document.getElementById('status').innerHTML = '<span style="color:#00FF66;font-weight:bold;font-size:18px;">✅ ТРАНСЛЯЦИЯ АКТИВНА (Видео + Звук)!</span><br><p style="color:#aaa;margin-top:8px;">Звук и видео успешно передаются с минимальной задержкой. Теперь вы можете свернуть это окно браузера.</p>';
           } else {
             document.getElementById('status').innerHTML = '<div style="background:#4a2200;border:2px solid #ffaa00;padding:16px;border-radius:10px;margin:15px 0;text-align:left;"><span style="color:#ffaa00;font-size:18px;font-weight:bold;">⚠️ ВНИМАНИЕ: ЗВУК НЕ ЗАХВАЧЕН!</span><br><br>При выборе вкладки не была включена передача звука.<br>Зрители будут видеть картинку, но без звука.<br><br><b>Как включить звук:</b><br>1. Нажмите «Остановить трансляцию» в приложении Luna.<br>2. Начните заново и в окне выбора вкладки обязательно включите галочку <b>«Также предоставить доступ к аудио вкладки»</b> («Also share tab audio»).</div>';
           }
@@ -2966,7 +3044,7 @@ class _RoomPageState extends State<RoomPage> {
           if (latestUsers && latestUsers.length > 0) {
             for (const user of latestUsers) {
               const uId = user.id || user;
-              if (uId && uId !== socket.id && !peerConnections[uId]) {
+              if (uId && uId !== socket.id && uId !== hostAppSocketId && !peerConnections[uId]) {
                 createOffer(uId);
               }
             }
@@ -2980,7 +3058,7 @@ class _RoomPageState extends State<RoomPage> {
       socket.on('new-viewer', async (data) => {
         if (!localStream) return;
         const vId = (data && data.viewerId) ? data.viewerId : data;
-        if (vId && vId !== socket.id) {
+        if (vId && vId !== socket.id && vId !== hostAppSocketId) {
           await createOffer(vId);
         }
       });
@@ -2990,38 +3068,65 @@ class _RoomPageState extends State<RoomPage> {
         if (!localStream) return;
         for (const user of latestUsers) {
           const uId = user.id || user;
-          if (uId && uId !== socket.id && !peerConnections[uId]) {
+          if (uId && uId !== socket.id && uId !== hostAppSocketId && !peerConnections[uId]) {
             await createOffer(uId);
           }
         }
       });
 
-      socket.on('user-joined', async (user) => {
-        if (!localStream) return;
-        const targetId = user.id || user;
-        if (targetId && targetId !== socket.id && !peerConnections[targetId]) {
-          await createOffer(targetId);
-        }
-      });
-
       socket.on('user-left', (data) => {
-        if (peerConnections[data.id]) {
-          peerConnections[data.id].close();
-          delete peerConnections[data.id];
+        const leftId = data ? (data.id || data) : null;
+        if (leftId && peerConnections[leftId]) {
+          try { peerConnections[leftId].close(); } catch(_) {}
+          delete peerConnections[leftId];
         }
       });
 
       async function createOffer(targetId) {
-        if (!localStream || targetId === socket.id) return;
+        if (!localStream || !targetId || targetId === socket.id || targetId === hostAppSocketId) return;
+        if (offerLocks[targetId]) return;
+        offerLocks[targetId] = true;
+
         try {
-          if (peerConnections[targetId]) {
-            try { peerConnections[targetId].close(); } catch(_) {}
+          const existingPc = peerConnections[targetId];
+          if (existingPc && (existingPc.connectionState === 'connected' || existingPc.iceConnectionState === 'connected')) {
+            offerLocks[targetId] = false;
+            return;
+          }
+          if (existingPc) {
+            try { existingPc.close(); } catch(_) {}
             delete peerConnections[targetId];
           }
           const pc = new RTCPeerConnection(config);
           peerConnections[targetId] = pc;
           
-          localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+          localStream.getTracks().forEach(track => {
+            if (track.kind === 'video' && 'contentHint' in track) {
+              track.contentHint = 'motion';
+            }
+            pc.addTrack(track, localStream);
+          });
+
+          // Prefer H264 hardware acceleration on mobile and Windows
+          try {
+            const transceivers = pc.getTransceivers();
+            for (const t of transceivers) {
+              if (t.sender && t.sender.track && t.sender.track.kind === 'video') {
+                if (window.RTCRtpReceiver && RTCRtpReceiver.getCapabilities) {
+                  const caps = RTCRtpReceiver.getCapabilities('video');
+                  if (caps && caps.codecs) {
+                    const h264 = caps.codecs.filter(c => c.mimeType.toLowerCase() === 'video/h264');
+                    const others = caps.codecs.filter(c => c.mimeType.toLowerCase() !== 'video/h264');
+                    if (h264.length > 0) {
+                      t.setCodecPreferences([...h264, ...others]);
+                    }
+                  }
+                }
+              }
+            }
+          } catch(e) {
+            console.warn('Codec preference warning:', e);
+          }
           
           pc.onicecandidate = (event) => {
             if (event.candidate) {
@@ -3038,8 +3143,34 @@ class _RoomPageState extends State<RoomPage> {
             }
           };
 
+          pc.onconnectionstatechange = () => {
+            if (pc.connectionState === 'failed') {
+              try { pc.close(); } catch(_) {}
+              delete peerConnections[targetId];
+            }
+          };
+
           const offer = await pc.createOffer();
           await pc.setLocalDescription(offer);
+
+          // Cap bitrate at 2.5 Mbps and framerate at 30 fps to eliminate buffer bloat and lag
+          try {
+            const senders = pc.getSenders();
+            for (const s of senders) {
+              if (s.track && s.track.kind === 'video' && s.getParameters && s.setParameters) {
+                const params = s.getParameters();
+                params.degradationPreference = 'maintain-framerate';
+                if (!params.encodings || params.encodings.length === 0) {
+                  params.encodings = [{}];
+                }
+                params.encodings[0].maxBitrate = 2500000; // 2.5 Mbps cap
+                params.encodings[0].maxFramerate = 30;
+                await s.setParameters(params);
+              }
+            }
+          } catch(e) {
+            console.warn('Bitrate param warning:', e);
+          }
 
           socket.emit('webrtc-offer', {
             targetId,
@@ -3048,28 +3179,36 @@ class _RoomPageState extends State<RoomPage> {
           });
         } catch (err) {
           console.error('Error creating offer for ' + targetId, err);
+        } finally {
+          setTimeout(() => { offerLocks[targetId] = false; }, 1500);
         }
       }
 
       socket.on('webrtc-answer', async (data) => {
-        if (peerConnections[data.senderId]) {
+        if (data && data.senderId && peerConnections[data.senderId] && data.answer) {
           const pc = peerConnections[data.senderId];
-          await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-          hasRemoteDescription[data.senderId] = true;
-          if (iceCandidateQueue[data.senderId]) {
-            for (const candidate of iceCandidateQueue[data.senderId]) {
-              await pc.addIceCandidate(new RTCIceCandidate(candidate));
+          try {
+            await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+            hasRemoteDescription[data.senderId] = true;
+            if (iceCandidateQueue[data.senderId]) {
+              for (const candidate of iceCandidateQueue[data.senderId]) {
+                if (candidate) {
+                  try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch(_) {}
+                }
+              }
+              delete iceCandidateQueue[data.senderId];
             }
-            delete iceCandidateQueue[data.senderId];
+          } catch(e) {
+            console.error('Error setting remote answer:', e);
           }
         }
       });
 
       socket.on('webrtc-ice-candidate', async (data) => {
-        if (peerConnections[data.senderId]) {
+        if (data && data.senderId && peerConnections[data.senderId] && data.candidate) {
           const pc = peerConnections[data.senderId];
           if (hasRemoteDescription[data.senderId]) {
-            await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+            try { await pc.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch(_) {}
           } else {
             if (!iceCandidateQueue[data.senderId]) iceCandidateQueue[data.senderId] = [];
             iceCandidateQueue[data.senderId].push(data.candidate);
@@ -3340,7 +3479,9 @@ class _RoomPageState extends State<RoomPage> {
 
                         // Live video stream overlay (WebRTC)
                         if (_isLiveStreaming) ...[
-                          if (_webrtcManager != null &&
+                          if (_isLocalStreamHost)
+                            _buildHostStreamBanner()
+                          else if (_webrtcManager != null &&
                               _webrtcManager!.isPeerConnected &&
                               _webrtcManager!.remoteRenderer.srcObject != null &&
                               _webrtcManager!.remoteRenderer.textureId != null)
@@ -3348,8 +3489,6 @@ class _RoomPageState extends State<RoomPage> {
                               _webrtcManager!.remoteRenderer,
                               objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
                             )
-                          else if (_isLocalStreamHost)
-                            _buildHostStreamBanner()
                           else
                             Center(
                               child: Column(

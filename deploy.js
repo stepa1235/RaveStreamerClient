@@ -2,9 +2,13 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
-const token = process.env.GITHUB_TOKEN || process.env.TOKEN || '';
+const token = (process.env.GITHUB_TOKEN || process.env.TOKEN || '').trim();
+if (!token) {
+  console.error('ERROR: GITHUB_TOKEN or TOKEN environment variable is required to deploy.');
+  process.exit(1);
+}
 const repo = 'stepa1235/RaveStreamerClient';
-const releaseTag = 'v1.0.5';
+const releaseTag = 'v1.0.6';
 
 const headers = {
   'Authorization': `Bearer ${token}`,
@@ -104,7 +108,7 @@ async function deploy() {
   }, JSON.stringify({
     tag_name: releaseTag,
     name: `Luna ${releaseTag}`,
-    body: 'Luna v1.0.5 - Fixed broadcast join rejection bug on server (allowing broadcaster tab to connect seamlessly), cleaned top-left UI inscriptions, and stabilized WebRTC SDP/ICE exchange for smooth real-time streaming.'
+    body: 'Luna v1.0.6 - WebRTC tab streaming optimization: ultra-low latency (<150ms) with motion contentHint, prioritized hardware H.264 video codec, 2.5Mbps bitrate cap, offerLocks race condition prevention, elimination of host self-streaming loopback, and safe socket parsing across desktop and mobile.'
   }));
 
   const uploadUrl = release.upload_url;

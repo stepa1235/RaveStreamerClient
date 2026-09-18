@@ -17,21 +17,18 @@ class WebRTCManager {
   final Map<String, List<Map<String, dynamic>>> _iceCandidateQueue = {};
   final Map<String, bool> _hasRemoteDescription = {};
 
-  final Map<String, dynamic> configuration = {
+  Map<String, dynamic> configuration = {
     'iceServers': [
       {'urls': 'stun:stun.l.google.com:19302'},
       {'urls': 'stun:stun1.l.google.com:19302'},
-      {'urls': 'stun:195.133.26.226:3478'},
-      {
-        'urls': [
-          'turn:195.133.26.226:3478?transport=udp',
-          'turn:195.133.26.226:3478?transport=tcp',
-        ],
-        'username': 'luna',
-        'credential': 'luna2026secret',
-      },
     ]
   };
+
+  void updateIceServers(dynamic servers) {
+    if (servers is List && servers.isNotEmpty) {
+      configuration['iceServers'] = servers;
+    }
+  }
 
   Function()? onStreamStarted;
   Function()? onStreamStopped;
@@ -50,6 +47,13 @@ class WebRTCManager {
     remoteRenderer.onResize = () {
       onRenderUpdated?.call();
     };
+
+    // Listen to ICE servers update from server
+    socket.on('ice-servers', (data) {
+      updateIceServers(data);
+    });
+    // Request ICE servers dynamically from server
+    socket.emit('get-ice-servers', {'roomId': roomId});
 
     // Listen to signaling events
     socket.on('webrtc-offer', _handleOffer);
@@ -153,13 +157,15 @@ class WebRTCManager {
   // --- VIEWER SPECIFIC ---
 
   Future<void> _handleOffer(dynamic data) async {
-    final senderId = data['senderId'];
-    if (senderId == socket.id) {
-      debugPrint('Received webrtc-offer from self, ignoring.');
+    if (data is! Map) return;
+    final senderId = data['senderId']?.toString();
+    if (senderId == null || senderId.isEmpty || senderId == socket.id) {
+      debugPrint('Received webrtc-offer from self or invalid sender, ignoring.');
       return;
     }
     
     final offerData = data['offer'];
+    if (offerData is! Map) return;
     
     final pc = await createPeerConnection(configuration);
     peerConnections[senderId] = pc;
@@ -198,7 +204,9 @@ class WebRTCManager {
     };
 
     pc.onAddStream = (stream) {
-      remoteRenderer.srcObject = stream;
+      if (remoteRenderer.srcObject != stream) {
+        remoteRenderer.srcObject = stream;
+      }
       isPeerConnected = true;
       onStreamStarted?.call();
       onRenderUpdated?.call();
@@ -210,7 +218,9 @@ class WebRTCManager {
         event.track.enabled = true;
       }
       if (event.streams.isNotEmpty) {
-        remoteRenderer.srcObject = event.streams[0];
+        if (remoteRenderer.srcObject != event.streams[0]) {
+          remoteRenderer.srcObject = event.streams[0];
+        }
       } else {
         try {
           remoteRenderer.srcObject ??= await createLocalMediaStream('remote_stream_${DateTime.now().millisecondsSinceEpoch}');

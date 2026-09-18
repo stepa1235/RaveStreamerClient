@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -158,7 +159,7 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
-String globalAppVersion = "1.0.5";
+String globalAppVersion = "1.0.6";
 
 bool isNewerVersion(String latest, String current) {
   try {
@@ -259,8 +260,17 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
   String _savedServerUrl = '';
   bool _isLoading = true;
   
-  // Unique client ID generated in memory at app startup to resolve localhost username collision
-  final String _clientId = 'client_${DateTime.now().microsecondsSinceEpoch}_${(1000 + (DateTime.now().millisecond % 9000))}';
+  // Cryptographically secure unique client ID (UUID v4)
+  static String _generateSecureClientId() {
+    final random = Random.secure();
+    final values = List<int>.generate(16, (i) => random.nextInt(256));
+    values[6] = (values[6] & 0x0f) | 0x40; // RFC 4122 v4
+    values[8] = (values[8] & 0x3f) | 0x80; // RFC 4122 variant
+    final hex = values.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20, 32)}';
+  }
+
+  late final String _clientId = _generateSecureClientId();
 
   @override
   void initState() {
@@ -855,6 +865,19 @@ class _ConnectionPageState extends State<ConnectionPage> {
     if (serverUrl.isEmpty || serverUrl.contains('localhost') || serverUrl.contains('127.0.0.1')) {
       serverUrl = 'http://luna.lumigrid.ru:3000';
       _serverController.text = serverUrl;
+    }
+
+    final parsedUri = Uri.tryParse(serverUrl);
+    if (parsedUri == null ||
+        (!parsedUri.isScheme('http') && !parsedUri.isScheme('https')) ||
+        parsedUri.host.isEmpty) {
+      setState(() {
+        _isConnecting = false;
+        _errorMessage = widget.locale == 'ru'
+            ? 'Некорректный адрес сервера (http:// или https://)'
+            : 'Invalid server URL (must be http:// or https://)';
+      });
+      return;
     }
 
     // Save connection settings immediately so nickname persists
@@ -1767,11 +1790,6 @@ class _RoomPageState extends State<RoomPage> {
         if (u['id'] == _socket.id && u['isHost'] == true) return true;
       }
     }
-    if (_hostUsername != null && _hostUsername!.isNotEmpty) {
-      final myName = widget.username.trim().toLowerCase();
-      if (myName == _hostUsername!.toLowerCase()) return true;
-    }
-    if (_hostUsername == null && _users.isNotEmpty && _users[0]['id'] == _socket.id) return true;
     return false;
   }
   
@@ -1977,6 +1995,8 @@ class _RoomPageState extends State<RoomPage> {
       setState(() {
         _isConnected = true;
       });
+      // Request ICE servers dynamically
+      _socket.emit('get-ice-servers', {'roomId': widget.roomId});
       // Join the specified room
       _socket.emit('join-room', {
         'roomId': widget.roomId,
@@ -2153,14 +2173,15 @@ class _RoomPageState extends State<RoomPage> {
     // Handle initial room state when joining
     _socket.on('room-state', (data) {
       if (_isDisposed || !mounted) return;
-      final videoUrl = data['videoUrl'] as String;
-      final videoName = data['videoName'] as String;
-      final isPlaying = data['isPlaying'] as bool;
-      final calculatedTime = (data['calculatedTime'] as num).toDouble();
-      final queueData = data['queue'] as List<dynamic>? ?? [];
-      final headers = data['headers'] as Map<String, dynamic>?;
-      final isLive = data['isLiveStreaming'] as bool? ?? false;
-      final hostUser = data['hostUsername'] as String?;
+      if (data is! Map) return;
+      final videoUrl = data['videoUrl']?.toString() ?? '';
+      final videoName = data['videoName']?.toString() ?? 'No Video Loaded';
+      final isPlaying = data['isPlaying'] == true;
+      final calculatedTime = (data['calculatedTime'] is num) ? (data['calculatedTime'] as num).toDouble() : 0.0;
+      final queueData = data['queue'] is List ? (data['queue'] as List<dynamic>) : <dynamic>[];
+      final headers = data['headers'] is Map ? Map<String, dynamic>.from(data['headers'] as Map) : null;
+      final isLive = data['isLiveStreaming'] == true;
+      final hostUser = data['hostUsername']?.toString();
 
       setState(() {
         _hasJoinedRoom = true;
@@ -2176,6 +2197,7 @@ class _RoomPageState extends State<RoomPage> {
           _isLiveStreaming = true;
         });
         _triggerControlsVisibility();
+        try { _mkPlayer?.pause(); } catch (_) {}
         _socket.emit('new-viewer', {'roomId': widget.roomId, 'viewerId': _socket.id});
       } else if (videoUrl.isNotEmpty) {
         _setupVideoPlayer(videoUrl, videoName, startPlaying: isPlaying, startSeconds: calculatedTime, headers: headers);
@@ -2188,6 +2210,7 @@ class _RoomPageState extends State<RoomPage> {
           _isLiveStreaming = true;
         });
         _triggerControlsVisibility();
+        try { _mkPlayer?.pause(); } catch (_) {}
         _socket.emit('new-viewer', {'roomId': widget.roomId, 'viewerId': _socket.id});
       }
     });
@@ -2219,9 +2242,10 @@ class _RoomPageState extends State<RoomPage> {
     // Handle video change event
     _socket.on('video-changed', (data) {
       if (_isDisposed || !mounted) return;
-      final videoUrl = data['videoUrl'] as String? ?? '';
-      final videoName = data['videoName'] as String? ?? 'No Video Loaded';
-      final headers = data['headers'] as Map<String, dynamic>?;
+      if (data is! Map) return;
+      final videoUrl = data['videoUrl']?.toString() ?? '';
+      final videoName = data['videoName']?.toString() ?? 'No Video Loaded';
+      final headers = data['headers'] is Map ? Map<String, dynamic>.from(data['headers'] as Map) : null;
       
       if (videoUrl.isEmpty) {
         try { _mkPlayer?.open(Media('')); } catch (_) {}
@@ -2243,48 +2267,60 @@ class _RoomPageState extends State<RoomPage> {
     _socket.on('queue-updated', (data) {
       if (_isDisposed || !mounted) return;
       setState(() {
-        _queue = data['queue'] as List<dynamic>;
+        if (data is Map && data['queue'] is List) {
+          _queue = data['queue'] as List<dynamic>;
+        } else if (data is List) {
+          _queue = data;
+        } else {
+          _queue = [];
+        }
       });
     });
 
     // Handle remote play event
     _socket.on('played', (data) {
       if (_isDisposed || !mounted) return;
-      final time = (data['time'] as num).toDouble();
+      final time = (data is Map && data['time'] is num) ? (data['time'] as num).toDouble() : 0.0;
       _handleRemotePlay(time);
     });
 
     // Handle remote pause event
     _socket.on('paused', (data) {
       if (_isDisposed || !mounted) return;
-      final time = (data['time'] as num).toDouble();
+      final time = (data is Map && data['time'] is num) ? (data['time'] as num).toDouble() : 0.0;
       _handleRemotePause(time);
     });
 
     // Handle remote seek event
     _socket.on('seeked', (data) {
       if (_isDisposed || !mounted) return;
-      final time = (data['time'] as num).toDouble();
+      final time = (data is Map && data['time'] is num) ? (data['time'] as num).toDouble() : 0.0;
       _handleRemoteSeek(time);
     });
 
     // Handle continuous background sync
     _socket.on('sync-state-broadcast', (data) {
       if (_isDisposed || !mounted) return;
-      final isPlaying = data['isPlaying'] as bool;
-      final currentTime = (data['currentTime'] as num).toDouble();
+      if (data is! Map) return;
+      final isPlaying = data['isPlaying'] == true;
+      final currentTime = (data['currentTime'] is num) ? (data['currentTime'] as num).toDouble() : 0.0;
       _handlePeriodicSync(isPlaying, currentTime);
     });
 
     // Handle Chat Message Broadcast
     _socket.on('chat-msg', (data) {
       if (_isDisposed || !mounted) return;
+      if (data is! Map) return;
+      
+      final sender = data['username']?.toString() ?? 'Unknown';
+      final text = data['text']?.toString() ?? '';
+      
       setState(() {
         _messages.add({
-          'clientId': (data['clientId'] ?? '') as String,
-          'sender': data['username'] as String,
-          'text': data['text'] as String,
-          'time': (data['timestamp'] ?? data['time'] ?? '') as String,
+          'clientId': (data['clientId'] ?? '').toString(),
+          'sender': sender,
+          'text': text,
+          'time': (data['timestamp'] ?? data['time'] ?? '').toString(),
         });
         if (_selectedTab != 1) {
           _unreadMessages++;
@@ -2305,16 +2341,19 @@ class _RoomPageState extends State<RoomPage> {
     // Handle Chat History (e.g. on rejoin/reconnect)
     _socket.on('chat-history', (data) {
       if (_isDisposed || !mounted) return;
-      final history = data as List<dynamic>;
+      if (data is! List) return;
+      final history = data;
       setState(() {
         _messages.clear();
         for (final msg in history) {
-          _messages.add({
-            'clientId': (msg['clientId'] ?? '') as String,
-            'sender': msg['username'] as String,
-            'text': msg['text'] as String,
-            'time': (msg['timestamp'] ?? msg['time'] ?? '') as String,
-          });
+          if (msg is Map) {
+            _messages.add({
+              'clientId': (msg['clientId'] ?? '').toString(),
+              'sender': (msg['username'] ?? 'Unknown').toString(),
+              'text': (msg['text'] ?? '').toString(),
+              'time': (msg['timestamp'] ?? msg['time'] ?? '').toString(),
+            });
+          }
         }
       });
       // Scroll to bottom
@@ -2380,10 +2419,15 @@ class _RoomPageState extends State<RoomPage> {
     });
   }
 
+  int _lastChatSentMs = 0;
+
   // Send chat message
   void _sendChatMessage() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now - _lastChatSentMs < 300) return; // Rate limit: max 1 per 300ms
+    _lastChatSentMs = now;
     final text = _chatInputController.text.trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty || text.length > 500) return;
     _socket.emit('chat-msg', {
       'roomId': widget.roomId,
       'username': widget.username,

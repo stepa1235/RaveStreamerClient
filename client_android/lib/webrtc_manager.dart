@@ -19,21 +19,18 @@ class WebRTCManager {
   final Map<String, List<Map<String, dynamic>>> _iceCandidateQueue = {};
   final Map<String, bool> _hasRemoteDescription = {};
 
-  final Map<String, dynamic> configuration = {
+  Map<String, dynamic> configuration = {
     'iceServers': [
       {'urls': 'stun:stun.l.google.com:19302'},
       {'urls': 'stun:stun1.l.google.com:19302'},
-      {'urls': 'stun:195.133.26.226:3478'},
-      {
-        'urls': [
-          'turn:195.133.26.226:3478?transport=udp',
-          'turn:195.133.26.226:3478?transport=tcp',
-        ],
-        'username': 'luna',
-        'credential': 'luna2026secret',
-      },
     ]
   };
+
+  void updateIceServers(dynamic servers) {
+    if (servers is List && servers.isNotEmpty) {
+      configuration['iceServers'] = servers;
+    }
+  }
 
   Function()? onStreamStarted;
   Function()? onStreamStopped;
@@ -60,6 +57,13 @@ class WebRTCManager {
         debugPrint('Failed to set media audio mode: $e');
       }
     }
+
+    // Listen to ICE servers update from server
+    socket.on('ice-servers', (data) {
+      updateIceServers(data);
+    });
+    // Request ICE servers dynamically from server
+    socket.emit('get-ice-servers', {'roomId': roomId});
 
     // Listen to signaling events
     socket.on('webrtc-offer', _handleOffer);
@@ -212,7 +216,9 @@ class WebRTCManager {
       };
 
       pc.onAddStream = (stream) {
-        remoteRenderer.srcObject = stream;
+        if (remoteRenderer.srcObject != stream) {
+          remoteRenderer.srcObject = stream;
+        }
         isPeerConnected = true;
         if (Platform.isAndroid || Platform.isIOS) {
           try { Helper.setSpeakerphoneOn(true); } catch (_) {}
@@ -231,7 +237,9 @@ class WebRTCManager {
           } catch (_) {}
         }
         if (event.streams.isNotEmpty) {
-          remoteRenderer.srcObject = event.streams[0];
+          if (remoteRenderer.srcObject != event.streams[0]) {
+            remoteRenderer.srcObject = event.streams[0];
+          }
         } else {
           try {
             remoteRenderer.srcObject ??= await createLocalMediaStream('remote_stream_${DateTime.now().millisecondsSinceEpoch}');
