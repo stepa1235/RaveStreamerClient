@@ -66,6 +66,15 @@ const Map<String, Map<String, String>> _localizedValues = {
     'themeCyan': 'Neon Cyan',
     'themeGold': 'Sunset Gold',
     'themePurple': 'Retro Purple',
+    'preferredQualityLabel': 'Stream Quality',
+    'showSystemMessages': 'System Messages in Chat',
+    'showTimestamps': 'Show Chat Timestamps',
+    'chatSounds': 'Chat Sound Alerts',
+    'autoScrollChat': 'Auto-scroll Chat',
+    'syncTolerance': 'Player Sync Tolerance',
+    'compactChat': 'Compact Chat View',
+    'noParticipants': 'No participants',
+    'youLabel': 'You',
   },
   'ru': {
     'title': 'Luna',
@@ -115,6 +124,15 @@ const Map<String, Map<String, String>> _localizedValues = {
     'themeCyan': 'Неоновый циан',
     'themeGold': 'Золотой закат',
     'themePurple': 'Ретро пурпур',
+    'preferredQualityLabel': 'Качество трансляции',
+    'showSystemMessages': 'Системные сообщения в чате',
+    'showTimestamps': 'Время отправки сообщений',
+    'chatSounds': 'Звуковые уведомления чата',
+    'autoScrollChat': 'Автопрокрутка чата',
+    'syncTolerance': 'Порог синхронизации видео',
+    'compactChat': 'Компактный режим чата',
+    'noParticipants': 'Нет участников',
+    'youLabel': 'Вы',
   }
 };
 
@@ -171,7 +189,7 @@ Future<void> removeHostToken(String roomId) async {
   await saveSettings({'hostTokens': _globalHostTokens});
 }
 
-String globalAppVersion = "1.0.8";
+String globalAppVersion = "1.0.9";
 
 bool isNewerVersion(String latest, String current) {
   try {
@@ -1810,6 +1828,15 @@ class _RoomPageState extends State<RoomPage> {
   String? _hostUsername;
   String? _hostToken;
 
+  // Real-time reactive users notifier for dialog & participants
+  final ValueNotifier<List<dynamic>> _usersNotifier = ValueNotifier<List<dynamic>>([]);
+  bool _showSystemMessages = true;
+  bool _showChatTimestamps = true;
+  bool _chatSounds = true;
+  bool _autoScrollChat = true;
+  double _syncToleranceSec = 2.0;
+  bool _compactChat = false;
+
   bool get _isHost {
     if (_socket.id != null) {
       for (final u in _users) {
@@ -1859,6 +1886,22 @@ class _RoomPageState extends State<RoomPage> {
     _chatFontSize = widget.chatFontSize;
     _hostToken = _globalHostTokens[widget.roomId];
     _selectedTab = 1; // Default to Chat tab for convenient Rave-like experience
+    _usersNotifier.value = List.from(_users);
+    
+    // Load stream and UI settings
+    loadSettings().then((data) {
+      if (mounted) {
+        setState(() {
+          if (data.containsKey('preferredQuality')) _preferredQuality = data['preferredQuality'];
+          if (data.containsKey('showSystemMessages')) _showSystemMessages = data['showSystemMessages'] == true;
+          if (data.containsKey('showChatTimestamps')) _showChatTimestamps = data['showChatTimestamps'] == true;
+          if (data.containsKey('chatSounds')) _chatSounds = data['chatSounds'] == true;
+          if (data.containsKey('autoScrollChat')) _autoScrollChat = data['autoScrollChat'] == true;
+          if (data.containsKey('syncToleranceSec')) _syncToleranceSec = (data['syncToleranceSec'] as num).toDouble();
+          if (data.containsKey('compactChat')) _compactChat = data['compactChat'] == true;
+        });
+      }
+    });
     // Pre-create player ONCE
     final player = WebviewPlayer();
     player.initialize().then((_) {
@@ -1945,6 +1988,7 @@ class _RoomPageState extends State<RoomPage> {
   @override
   void dispose() {
     _isDisposed = true;
+    _usersNotifier.dispose();
     _webrtcManager?.stop();
     _syncTimer?.cancel();
     _controlsTimer?.cancel();
@@ -2123,6 +2167,7 @@ class _RoomPageState extends State<RoomPage> {
         _isConnected = false;
         _users = [];
       });
+      _usersNotifier.value = [];
     });
 
     // Handle user list updates
@@ -2143,6 +2188,7 @@ class _RoomPageState extends State<RoomPage> {
           _hostUsername = detectedHost;
         }
       });
+      _usersNotifier.value = List.from(updatedUsers);
     });
 
     _socket.on('host-changed', (data) {
@@ -2179,6 +2225,7 @@ class _RoomPageState extends State<RoomPage> {
             _users.removeWhere((u) => u['id'] == newUser['id']);
             _users.add(newUser);
           });
+          _usersNotifier.value = List.from(_users);
         }
       }
     });
@@ -2190,6 +2237,7 @@ class _RoomPageState extends State<RoomPage> {
         setState(() {
           _users.removeWhere((u) => u['id'] == userId);
         });
+        _usersNotifier.value = List.from(_users);
       }
     });
 
@@ -2364,16 +2412,24 @@ class _RoomPageState extends State<RoomPage> {
           _unreadMessages++;
         }
       });
+      if (_chatSounds && sender != widget.username && sender != 'System' && sender != 'Система' && data['clientId'] != widget.clientId) {
+        try {
+          HapticFeedback.lightImpact();
+          SystemSound.play(SystemSoundType.click);
+        } catch (_) {}
+      }
       // Scroll to bottom
-      Timer(const Duration(milliseconds: 100), () {
-        if (_chatScrollController.hasClients) {
-          _chatScrollController.animateTo(
-            _chatScrollController.position.maxScrollExtent,
-            duration: const Duration(milliseconds: 200),
-            curve: Curves.easeOut,
-          );
-        }
-      });
+      if (_autoScrollChat) {
+        Timer(const Duration(milliseconds: 100), () {
+          if (_chatScrollController.hasClients) {
+            _chatScrollController.animateTo(
+              _chatScrollController.position.maxScrollExtent,
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeOut,
+            );
+          }
+        });
+      }
     });
 
     // Handle Chat History (e.g. on rejoin/reconnect)
@@ -2479,6 +2535,10 @@ class _RoomPageState extends State<RoomPage> {
       'roomId': widget.roomId,
       'targetSocketId': targetSocketId,
     });
+    setState(() {
+      _users.removeWhere((u) => u['id'] == targetSocketId);
+    });
+    _usersNotifier.value = List.from(_users);
   }
 
   // Ban user (Host only)
@@ -2487,6 +2547,10 @@ class _RoomPageState extends State<RoomPage> {
       'roomId': widget.roomId,
       'targetSocketId': targetSocketId,
     });
+    setState(() {
+      _users.removeWhere((u) => u['id'] == targetSocketId);
+    });
+    _usersNotifier.value = List.from(_users);
   }
 
   // Set up video player with a specific URL (uses media_kit which supports HLS natively)
@@ -3017,7 +3081,7 @@ class _RoomPageState extends State<RoomPage> {
       _mkPlayer!.pause();
     }
 
-    if (drift > 1.5) {
+    if (drift > _syncToleranceSec) {
       _mkPlayer!.seek(Duration(milliseconds: (serverSeconds * 1000).toInt())).then((_) {
         _isIncomingUpdate = false;
       });
@@ -3917,7 +3981,7 @@ class _RoomPageState extends State<RoomPage> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          '${user['username']}${isMe ? " (You)" : ""}',
+                          '${user['username']}${isMe ? (_locale == 'ru' ? ' (Вы)' : ' (You)') : ''}',
                           style: TextStyle(
                             fontSize: 12,
                             fontWeight: isMe ? FontWeight.bold : FontWeight.normal,
@@ -3968,6 +4032,111 @@ class _RoomPageState extends State<RoomPage> {
     );
   }
 
+  String _formatSystemMessage(String rawText) {
+    if (_locale == 'ru') {
+      if (rawText.endsWith('joined the room')) {
+        final name = rawText.replaceAll(' joined the room', '').trim();
+        return '$name присоединился к комнате';
+      }
+      if (rawText.endsWith('left the room')) {
+        final name = rawText.replaceAll(' left the room', '').trim();
+        return '$name покинул комнату';
+      }
+      if (rawText.contains('kicked from the room') || rawText.contains('was kicked')) {
+        final name = rawText.replaceAll(' was kicked from the room', '').replaceAll(' was kicked', '').trim();
+        return '$name был исключен из комнаты';
+      }
+      if (rawText.contains('banned from the room') || rawText.contains('was banned')) {
+        final name = rawText.replaceAll(' was banned from the room', '').replaceAll(' was banned', '').trim();
+        return '$name был заблокирован в комнате';
+      }
+    } else {
+      if (rawText.endsWith('присоединился к комнате')) {
+        final name = rawText.replaceAll(' присоединился к комнате', '').trim();
+        return '$name joined the room';
+      }
+      if (rawText.endsWith('покинул комнату')) {
+        final name = rawText.replaceAll(' покинул комнату', '').trim();
+        return '$name left the room';
+      }
+      if (rawText.contains('был исключен из комнаты')) {
+        final name = rawText.replaceAll(' был исключен из комнаты', '').trim();
+        return '$name was kicked from the room';
+      }
+      if (rawText.contains('был заблокирован в комнате')) {
+        final name = rawText.replaceAll(' был заблокирован в комнате', '').trim();
+        return '$name was banned from the room';
+      }
+    }
+    return rawText;
+  }
+
+  String _formatMessageTime(String? rawTime) {
+    if (rawTime == null || rawTime.isEmpty) {
+      final now = DateTime.now();
+      return '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+    }
+    final numVal = int.tryParse(rawTime);
+    if (numVal != null && numVal > 1000000) {
+      final dt = DateTime.fromMillisecondsSinceEpoch(numVal);
+      return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    }
+    if (rawTime.contains(':')) {
+      final parts = rawTime.split(':');
+      if (parts.length >= 2) {
+        return '${parts[0].padLeft(2, '0')}:${parts[1].padLeft(2, '0')}';
+      }
+    }
+    return rawTime;
+  }
+
+  Widget _buildSystemMessageWidget(String text) {
+    final localized = _formatSystemMessage(text);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 16),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.06),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.white.withOpacity(0.08)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                localized.contains('присоединился') || localized.contains('joined')
+                    ? Icons.login_rounded
+                    : (localized.contains('покинул') || localized.contains('left')
+                        ? Icons.logout_rounded
+                        : Icons.info_outline),
+                size: 13,
+                color: localized.contains('присоединился') || localized.contains('joined')
+                    ? Colors.greenAccent.withOpacity(0.8)
+                    : (localized.contains('покинул') || localized.contains('left')
+                        ? Colors.orangeAccent.withOpacity(0.8)
+                        : Colors.white.withOpacity(0.6)),
+              ),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  localized,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: Colors.white.withOpacity(0.7),
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildChatTab() {
     final primaryColor = Theme.of(context).primaryColor;
 
@@ -3976,19 +4145,25 @@ class _RoomPageState extends State<RoomPage> {
         // Message log
         Expanded(
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+            padding: EdgeInsets.symmetric(horizontal: 4, vertical: _compactChat ? 4 : 8),
             child: ListView.builder(
               controller: _chatScrollController,
               itemCount: _messages.length,
               itemBuilder: (context, index) {
                 final msg = _messages[index];
+                final isSystem = msg['sender'] == 'System' || msg['sender'] == 'Система' || msg['clientId'] == 'system';
+                if (isSystem) {
+                  if (!_showSystemMessages) return const SizedBox.shrink();
+                  return _buildSystemMessageWidget(msg['text'] ?? '');
+                }
+
                 final isMe = msg['clientId'] == widget.clientId;
                 final senderInitial = (msg['sender'] != null && msg['sender']!.isNotEmpty)
                     ? msg['sender']!.substring(0, 1).toUpperCase()
                     : '?';
 
                 return Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  padding: EdgeInsets.symmetric(vertical: _compactChat ? 2 : 4),
                   child: Row(
                     mainAxisAlignment: isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
                     crossAxisAlignment: CrossAxisAlignment.end,
@@ -3997,17 +4172,20 @@ class _RoomPageState extends State<RoomPage> {
                         Padding(
                           padding: const EdgeInsets.only(right: 8, bottom: 2),
                           child: CircleAvatar(
-                            radius: 14,
+                            radius: _compactChat ? 12 : 14,
                             backgroundColor: const Color(0xFF6C63FF).withOpacity(0.3),
                             child: Text(
                               senderInitial,
-                              style: const TextStyle(fontSize: 10, color: Color(0xFF00F2FE), fontWeight: FontWeight.bold),
+                              style: TextStyle(fontSize: _compactChat ? 9 : 10, color: const Color(0xFF00F2FE), fontWeight: FontWeight.bold),
                             ),
                           ),
                         ),
                       Flexible(
                         child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                          padding: EdgeInsets.symmetric(
+                            horizontal: _compactChat ? 10 : 14,
+                            vertical: _compactChat ? 6 : 10,
+                          ),
                           constraints: const BoxConstraints(maxWidth: 260),
                           decoration: BoxDecoration(
                             gradient: isMe
@@ -4059,6 +4237,19 @@ class _RoomPageState extends State<RoomPage> {
                                   height: 1.3,
                                 ),
                               ),
+                              if (_showChatTimestamps) ...[
+                                const SizedBox(height: 3),
+                                Align(
+                                  alignment: Alignment.bottomRight,
+                                  child: Text(
+                                    _formatMessageTime(msg['time']),
+                                    style: TextStyle(
+                                      fontSize: 9,
+                                      color: isMe ? Colors.white.withOpacity(0.65) : Colors.white.withOpacity(0.35),
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ],
                           ),
                         ),
@@ -4239,6 +4430,215 @@ class _RoomPageState extends State<RoomPage> {
             ),
           ),
           const SizedBox(height: 12),
+
+          // Preferred Quality selector
+          _buildCard(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Flexible(
+                  child: Text(
+                    _loc('preferredQualityLabel'),
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                DropdownButton<String>(
+                  value: _preferredQuality,
+                  dropdownColor: const Color(0xFF161426),
+                  style: const TextStyle(fontSize: 12, color: Colors.white),
+                  items: const [
+                    DropdownMenuItem(value: 'Auto', child: Text('Auto')),
+                    DropdownMenuItem(value: '1080p', child: Text('1080p (FHD)')),
+                    DropdownMenuItem(value: '720p', child: Text('720p (HD)')),
+                    DropdownMenuItem(value: '480p', child: Text('480p (SD)')),
+                  ],
+                  onChanged: (val) {
+                    if (val != null) {
+                      setState(() {
+                        _preferredQuality = val;
+                      });
+                      saveSettings({'preferredQuality': val});
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // Sync Tolerance selector
+          _buildCard(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Flexible(
+                  child: Text(
+                    _loc('syncTolerance'),
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                DropdownButton<double>(
+                  value: _syncToleranceSec,
+                  dropdownColor: const Color(0xFF161426),
+                  style: const TextStyle(fontSize: 12, color: Colors.white),
+                  items: [
+                    DropdownMenuItem(value: 1.0, child: Text(_locale == 'ru' ? '1.0 сек (Точно)' : '1.0s (Precise)')),
+                    DropdownMenuItem(value: 1.5, child: Text(_locale == 'ru' ? '1.5 сек (Высокая)' : '1.5s (High)')),
+                    DropdownMenuItem(value: 2.0, child: Text(_locale == 'ru' ? '2.0 сек (Норма)' : '2.0s (Default)')),
+                    DropdownMenuItem(value: 3.0, child: Text(_locale == 'ru' ? '3.0 сек (Мягкая)' : '3.0s (Relaxed)')),
+                    DropdownMenuItem(value: 5.0, child: Text(_locale == 'ru' ? '5.0 сек (Для медл. сети)' : '5.0s (Slow net)')),
+                  ],
+                  onChanged: (val) {
+                    if (val != null) {
+                      setState(() {
+                        _syncToleranceSec = val;
+                      });
+                      saveSettings({'syncToleranceSec': val});
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // System Messages Switch
+          _buildCard(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Flexible(
+                  child: Text(
+                    _loc('showSystemMessages'),
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                Switch(
+                  value: _showSystemMessages,
+                  activeColor: const Color(0xFF00F2FE),
+                  onChanged: (val) {
+                    setState(() {
+                      _showSystemMessages = val;
+                    });
+                    saveSettings({'showSystemMessages': val});
+                  },
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // Show Chat Timestamps Switch
+          _buildCard(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Flexible(
+                  child: Text(
+                    _loc('showTimestamps'),
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                Switch(
+                  value: _showChatTimestamps,
+                  activeColor: const Color(0xFF00F2FE),
+                  onChanged: (val) {
+                    setState(() {
+                      _showChatTimestamps = val;
+                    });
+                    saveSettings({'showChatTimestamps': val});
+                  },
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // Chat Sound Alerts Switch
+          _buildCard(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Flexible(
+                  child: Text(
+                    _loc('chatSounds'),
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                Switch(
+                  value: _chatSounds,
+                  activeColor: const Color(0xFF00F2FE),
+                  onChanged: (val) {
+                    setState(() {
+                      _chatSounds = val;
+                    });
+                    saveSettings({'chatSounds': val});
+                  },
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // Auto-scroll Chat Switch
+          _buildCard(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Flexible(
+                  child: Text(
+                    _loc('autoScrollChat'),
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                Switch(
+                  value: _autoScrollChat,
+                  activeColor: const Color(0xFF00F2FE),
+                  onChanged: (val) {
+                    setState(() {
+                      _autoScrollChat = val;
+                    });
+                    saveSettings({'autoScrollChat': val});
+                  },
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // Compact Chat View Switch
+          _buildCard(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Flexible(
+                  child: Text(
+                    _loc('compactChat'),
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                Switch(
+                  value: _compactChat,
+                  activeColor: const Color(0xFF00F2FE),
+                  onChanged: (val) {
+                    setState(() {
+                      _compactChat = val;
+                    });
+                    saveSettings({'compactChat': val});
+                  },
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+
           // View App Logs card
           _buildCard(
             child: Row(
@@ -4647,73 +5047,126 @@ class _RoomPageState extends State<RoomPage> {
     );
   }
 
-  // Users Dialog for mobile
+  // Users Dialog for mobile & tablet
   void _showUsersDialog() {
     showDialog(
       context: context,
-      builder: (context) {
-        final isMeHost = _isHost;
-        
-        return AlertDialog(
-          title: Text(_loc('activeUsers')),
-          backgroundColor: const Color(0xFF161426),
-          content: SizedBox(
-            width: 250,
-            height: 300,
-            child: ListView.builder(
-              itemCount: _users.length,
-              itemBuilder: (context, index) {
-                final user = _users[index];
-                final isMe = user['id'] == _socket.id;
-                final isHost = user['isHost'] == true || (_hostUsername != null && (user['username'] as String).toLowerCase() == _hostUsername!.toLowerCase()) || index == 0;
-                
-                return ListTile(
-                  leading: CircleAvatar(
-                    backgroundColor: isHost ? const Color(0xFF00F2FE) : const Color(0xFF6C63FF),
+      builder: (dialogCtx) {
+        return ValueListenableBuilder<List<dynamic>>(
+          valueListenable: _usersNotifier,
+          builder: (context, currentUsers, _) {
+            final isMeHost = _isHost;
+            return AlertDialog(
+              title: Row(
+                children: [
+                  const Icon(Icons.people_alt_outlined, color: Color(0xFF00F2FE), size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
                     child: Text(
-                      (user['username'] as String).substring(0, 1).toUpperCase(),
-                      style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
+                      '${_loc('activeUsers')} (${currentUsers.length})',
+                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                     ),
                   ),
-                  title: Text(
-                    '${user['username']}${isMe ? " (You)" : ""}',
-                    style: TextStyle(fontWeight: isMe ? FontWeight.bold : FontWeight.normal),
-                  ),
-                  trailing: isHost 
-                    ? Chip(label: Text(_loc('hostLabel'), style: const TextStyle(fontSize: 10))) 
-                    : (isMeHost && !isMe 
-                        ? Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              IconButton(
-                                icon: const Icon(Icons.exit_to_app, color: Colors.orangeAccent),
-                                tooltip: _loc('kickTooltip'),
-                                onPressed: () {
-                                  _kickUser(user['id']);
-                                  Navigator.pop(context); // Close dialog
-                                },
+                ],
+              ),
+              backgroundColor: const Color(0xFF161426),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              content: SizedBox(
+                width: 320,
+                height: 350,
+                child: currentUsers.isEmpty
+                    ? Center(
+                        child: Text(
+                          _loc('noParticipants'),
+                          style: TextStyle(color: Colors.white.withOpacity(0.5)),
+                        ),
+                      )
+                    : ListView.separated(
+                        itemCount: currentUsers.length,
+                        separatorBuilder: (_, __) => Divider(color: Colors.white.withOpacity(0.06), height: 1),
+                        itemBuilder: (context, index) {
+                          final user = currentUsers[index];
+                          final isMe = user['id'] == _socket.id;
+                          final isHost = user['isHost'] == true ||
+                              (_hostUsername != null &&
+                                  (user['username'] as String).toLowerCase() == _hostUsername!.toLowerCase()) ||
+                              index == 0;
+
+                          return ListTile(
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                            leading: CircleAvatar(
+                              radius: 18,
+                              backgroundColor: isHost ? const Color(0xFF00F2FE) : const Color(0xFF6C63FF),
+                              child: Text(
+                                (user['username'] as String).isNotEmpty
+                                    ? (user['username'] as String).substring(0, 1).toUpperCase()
+                                    : '?',
+                                style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 13),
                               ),
-                              IconButton(
-                                icon: const Icon(Icons.block, color: Colors.redAccent),
-                                tooltip: _loc('banTooltip'),
-                                onPressed: () {
-                                  _banUser(user['id']);
-                                  Navigator.pop(context); // Close dialog
-                                },
-                              ),
-                            ],
-                          ) 
-                        : null),
-                );
-              },
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: Text(_loc('close')),
-            ),
-          ],
+                            ),
+                            title: Row(
+                              children: [
+                                Flexible(
+                                  child: Text(
+                                    user['username'] as String,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontWeight: isMe ? FontWeight.bold : FontWeight.normal,
+                                      color: isMe ? const Color(0xFF00F2FE) : Colors.white,
+                                    ),
+                                  ),
+                                ),
+                                if (isMe) ...[
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    _locale == 'ru' ? ' (Вы)' : ' (You)',
+                                    style: const TextStyle(color: Color(0xFF00F2FE), fontSize: 12, fontWeight: FontWeight.bold),
+                                  ),
+                                ],
+                              ],
+                            ),
+                            trailing: isHost
+                                ? Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: Colors.amber.withOpacity(0.2),
+                                      border: Border.all(color: Colors.amber.withOpacity(0.5)),
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: Text(
+                                      _loc('hostLabel'),
+                                      style: const TextStyle(fontSize: 10, color: Colors.amber, fontWeight: FontWeight.bold),
+                                    ),
+                                  )
+                                : (isMeHost && !isMe
+                                    ? Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          IconButton(
+                                            icon: const Icon(Icons.exit_to_app, color: Colors.orangeAccent, size: 20),
+                                            tooltip: _loc('kickTooltip'),
+                                            onPressed: () => _kickUser(user['id']),
+                                          ),
+                                          IconButton(
+                                            icon: const Icon(Icons.block, color: Colors.redAccent, size: 20),
+                                            tooltip: _loc('banTooltip'),
+                                            onPressed: () => _banUser(user['id']),
+                                          ),
+                                        ],
+                                      )
+                                    : null),
+                          );
+                        },
+                      ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogCtx),
+                  child: Text(_loc('close'), style: const TextStyle(color: Color(0xFF00F2FE))),
+                ),
+              ],
+            );
+          },
         );
       },
     );

@@ -8,7 +8,7 @@ if (!token) {
   process.exit(1);
 }
 const repo = 'stepa1235/RaveStreamerClient';
-const releaseTag = 'v1.0.8';
+const releaseTag = 'v1.0.9';
 
 const headers = {
   'Authorization': `Bearer ${token}`,
@@ -108,7 +108,7 @@ async function deploy() {
   }, JSON.stringify({
     tag_name: releaseTag,
     name: `Luna ${releaseTag}`,
-    body: 'Luna v1.0.8 - Cryptographically secure room host persistence across reloads/reconnects during the room lifetime using secret host tokens and persistent client IDs; removed legacy RaveStreamer release artifacts.'
+    body: 'Luna v1.0.9 - Live reactive participants dialog updates in real time, localized system notifications in chat with stylish centered badge UI, and expanded user settings (quality preferences, timestamps, sync tolerance, auto-scroll, sound alerts, compact chat).'
   }));
 
   const uploadUrl = release.upload_url;
