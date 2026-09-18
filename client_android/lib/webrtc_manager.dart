@@ -49,9 +49,6 @@ class WebRTCManager {
 
     if (Platform.isAndroid || Platform.isIOS) {
       try {
-        await Helper.setSpeakerphoneOn(true);
-      } catch (_) {}
-      try {
         MethodChannel('com.example.client/permissions').invokeMethod('setMediaAudioMode');
       } catch (e) {
         debugPrint('Failed to set media audio mode: $e');
@@ -221,7 +218,6 @@ class WebRTCManager {
         }
         isPeerConnected = true;
         if (Platform.isAndroid || Platform.isIOS) {
-          try { Helper.setSpeakerphoneOn(true); } catch (_) {}
           try { MethodChannel('com.example.client/permissions').invokeMethod('setMediaAudioMode'); } catch (_) {}
         }
         onStreamStarted?.call();
@@ -232,9 +228,9 @@ class WebRTCManager {
         debugPrint('Got remote track: ${event.track.kind}, streams: ${event.streams.length}');
         if (event.track.kind == 'audio') {
           event.track.enabled = true;
-          try {
-            await Helper.setSpeakerphoneOn(true);
-          } catch (_) {}
+          if (Platform.isAndroid || Platform.isIOS) {
+            try { MethodChannel('com.example.client/permissions').invokeMethod('setMediaAudioMode'); } catch (_) {}
+          }
         }
         if (event.streams.isNotEmpty) {
           if (remoteRenderer.srcObject != event.streams[0]) {

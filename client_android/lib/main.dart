@@ -159,7 +159,7 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
-String globalAppVersion = "1.0.6";
+String globalAppVersion = "1.0.7";
 
 bool isNewerVersion(String latest, String current) {
   try {
@@ -2314,6 +2314,11 @@ class _RoomPageState extends State<RoomPage> {
       
       final sender = data['username']?.toString() ?? 'Unknown';
       final text = data['text']?.toString() ?? '';
+
+      // Do not display broadcaster join/leave notifications
+      if (text.contains('(Broadcaster)') || text.contains('\u200B') || sender.contains('(Broadcaster)')) {
+        return;
+      }
       
       setState(() {
         _messages.add({
@@ -2347,6 +2352,11 @@ class _RoomPageState extends State<RoomPage> {
         _messages.clear();
         for (final msg in history) {
           if (msg is Map) {
+            final t = (msg['text'] ?? '').toString();
+            final s = (msg['username'] ?? '').toString();
+            if (t.contains('(Broadcaster)') || t.contains('\u200B') || s.contains('(Broadcaster)')) {
+              continue;
+            }
             _messages.add({
               'clientId': (msg['clientId'] ?? '').toString(),
               'sender': (msg['username'] ?? 'Unknown').toString(),
@@ -4022,17 +4032,6 @@ class _RoomPageState extends State<RoomPage> {
                                   fontSize: _chatFontSize,
                                   color: Colors.white,
                                   height: 1.3,
-                                ),
-                              ),
-                              const SizedBox(height: 3),
-                              Align(
-                                alignment: Alignment.bottomRight,
-                                child: Text(
-                                  msg['time'] ?? '',
-                                  style: TextStyle(
-                                    fontSize: 9,
-                                    color: Colors.white.withOpacity(0.5),
-                                  ),
                                 ),
                               ),
                             ],

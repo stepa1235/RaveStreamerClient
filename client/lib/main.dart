@@ -170,7 +170,7 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
-String globalAppVersion = "1.0.6";
+String globalAppVersion = "1.0.7";
 
 bool isNewerVersion(String latest, String current) {
   try {
@@ -2038,6 +2038,11 @@ class _RoomPageState extends State<RoomPage> {
       
       final sender = data['username']?.toString() ?? 'Unknown';
       final text = data['text']?.toString() ?? '';
+
+      // Do not display broadcaster join/leave notifications
+      if (text.contains('(Broadcaster)') || text.contains('\u200B') || sender.contains('(Broadcaster)')) {
+        return;
+      }
       
       setState(() {
         _messages.add({
@@ -2117,6 +2122,11 @@ class _RoomPageState extends State<RoomPage> {
         _messages.clear();
         for (final msg in history) {
           if (msg is Map) {
+            final t = (msg['text'] ?? '').toString();
+            final s = (msg['username'] ?? '').toString();
+            if (t.contains('(Broadcaster)') || t.contains('\u200B') || s.contains('(Broadcaster)')) {
+              continue;
+            }
             _messages.add({
               'clientId': (msg['clientId'] ?? '').toString(),
               'sender': (msg['username'] ?? 'Unknown').toString(),
@@ -2932,6 +2942,16 @@ class _RoomPageState extends State<RoomPage> {
 
   <p>Выберите <b>Вкладка Chrome / Edge</b> и поставьте галочку <b>Также поделиться аудио вкладки</b>!</p>
   
+  <div style="margin: 15px 0; display: flex; align-items: center; justify-content: center; gap: 10px;">
+    <label for="qualitySelect" style="font-size: 14px; color: #ccc;">Качество видео:</label>
+    <select id="qualitySelect" style="background: #25223c; color: white; border: 1px solid #00F2FE; border-radius: 8px; padding: 6px 14px; font-size: 14px; cursor: pointer;">
+      <option value="1080p" selected>1080p Full HD (30 FPS, 5.0 Mbps) - Чёткое</option>
+      <option value="720p">720p HD (30 FPS, 2.5 Mbps) - Экономичное</option>
+      <option value="1080p60">1080p 60 FPS (60 FPS, 7.5 Mbps) - Максимальная плавность</option>
+      <option value="original">Оригинал экрана (до 10 Mbps)</option>
+    </select>
+  </div>
+
   <button id="startBtn">Выбрать вкладку и начать</button>
   <div id="status" style="margin-top: 15px; font-size: 16px;">Подключение к серверу...</div>
   <video id="preview" autoplay muted volume="0" style="display:none;"></video>
@@ -2954,6 +2974,8 @@ class _RoomPageState extends State<RoomPage> {
       let peerConnections = {};
       let latestUsers = [];
       const offerLocks = {};
+      let selectedBitrate = 5000000;
+      let selectedFps = 30;
 
       let config = {
         iceServers: [
@@ -2995,13 +3017,35 @@ class _RoomPageState extends State<RoomPage> {
 
       document.getElementById('startBtn').onclick = async () => {
         try {
+          const qual = document.getElementById('qualitySelect') ? document.getElementById('qualitySelect').value : '1080p';
+          let videoConstraints = {
+            displaySurface: "browser",
+            frameRate: { ideal: 30, max: 60 },
+            width: { ideal: 1920, max: 1920 },
+            height: { ideal: 1080, max: 1080 }
+          };
+          selectedBitrate = 5000000;
+          selectedFps = 30;
+
+          if (qual === '720p') {
+            videoConstraints.width = { ideal: 1280, max: 1280 };
+            videoConstraints.height = { ideal: 720, max: 720 };
+            selectedBitrate = 2500000;
+            selectedFps = 30;
+          } else if (qual === '1080p60') {
+            videoConstraints.frameRate = { ideal: 60, max: 60 };
+            selectedBitrate = 7500000;
+            selectedFps = 60;
+          } else if (qual === 'original') {
+            delete videoConstraints.width;
+            delete videoConstraints.height;
+            videoConstraints.frameRate = { ideal: 60, max: 60 };
+            selectedBitrate = 10000000;
+            selectedFps = 60;
+          }
+
           localStream = await navigator.mediaDevices.getDisplayMedia({
-            video: {
-              displaySurface: "browser",
-              frameRate: { ideal: 30, max: 60 },
-              width: { ideal: 1280 },
-              height: { ideal: 720 }
-            },
+            video: videoConstraints,
             audio: {
               echoCancellation: false,
               noiseSuppression: false,
@@ -3153,7 +3197,7 @@ class _RoomPageState extends State<RoomPage> {
           const offer = await pc.createOffer();
           await pc.setLocalDescription(offer);
 
-          // Cap bitrate at 2.5 Mbps and framerate at 30 fps to eliminate buffer bloat and lag
+          // Apply bitrate and framerate settings according to selected profile
           try {
             const senders = pc.getSenders();
             for (const s of senders) {
@@ -3163,8 +3207,8 @@ class _RoomPageState extends State<RoomPage> {
                 if (!params.encodings || params.encodings.length === 0) {
                   params.encodings = [{}];
                 }
-                params.encodings[0].maxBitrate = 2500000; // 2.5 Mbps cap
-                params.encodings[0].maxFramerate = 30;
+                params.encodings[0].maxBitrate = selectedBitrate;
+                params.encodings[0].maxFramerate = selectedFps;
                 await s.setParameters(params);
               }
             }
@@ -4449,17 +4493,6 @@ class _RoomPageState extends State<RoomPage> {
                                   fontSize: _chatFontSize,
                                   color: Colors.white,
                                   height: 1.3,
-                                ),
-                              ),
-                              const SizedBox(height: 3),
-                              Align(
-                                alignment: Alignment.bottomRight,
-                                child: Text(
-                                  msg['time'] ?? '',
-                                  style: TextStyle(
-                                    fontSize: 9,
-                                    color: Colors.white.withOpacity(0.5),
-                                  ),
                                 ),
                               ),
                             ],

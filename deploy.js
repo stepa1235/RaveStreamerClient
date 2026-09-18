@@ -8,7 +8,7 @@ if (!token) {
   process.exit(1);
 }
 const repo = 'stepa1235/RaveStreamerClient';
-const releaseTag = 'v1.0.6';
+const releaseTag = 'v1.0.7';
 
 const headers = {
   'Authorization': `Bearer ${token}`,
@@ -108,7 +108,7 @@ async function deploy() {
   }, JSON.stringify({
     tag_name: releaseTag,
     name: `Luna ${releaseTag}`,
-    body: 'Luna v1.0.6 - WebRTC tab streaming optimization: ultra-low latency (<150ms) with motion contentHint, prioritized hardware H.264 video codec, 2.5Mbps bitrate cap, offerLocks race condition prevention, elimination of host self-streaming loopback, and safe socket parsing across desktop and mobile.'
+    body: 'Luna v1.0.7 - Quality boost (1080p Full HD 5Mbps default + quality selector: 720p, 1080p, 1080p60, Original), removed raw timestamp IDs from bottom of chat messages, silenced Broadcaster join/leave notifications in chat and system popups, and improved Android media audio routing.'
   }));
 
   const uploadUrl = release.upload_url;
