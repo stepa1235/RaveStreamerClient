@@ -8,7 +8,7 @@ if (!token) {
   process.exit(1);
 }
 const repo = 'stepa1235/RaveStreamerClient';
-const releaseTag = 'v1.0.7';
+const releaseTag = 'v1.0.8';
 
 const headers = {
   'Authorization': `Bearer ${token}`,
@@ -108,18 +108,16 @@ async function deploy() {
   }, JSON.stringify({
     tag_name: releaseTag,
     name: `Luna ${releaseTag}`,
-    body: 'Luna v1.0.7 - Quality boost (1080p Full HD 5Mbps default + quality selector: 720p, 1080p, 1080p60, Original), removed raw timestamp IDs from bottom of chat messages, silenced Broadcaster join/leave notifications in chat and system popups, and improved Android media audio routing.'
+    body: 'Luna v1.0.8 - Cryptographically secure room host persistence across reloads/reconnects during the room lifetime using secret host tokens and persistent client IDs; removed legacy RaveStreamer release artifacts.'
   }));
 
   const uploadUrl = release.upload_url;
 
-  console.log("4. Uploading Windows zip...");
+  console.log("4. Uploading Windows zip (Luna-Windows.zip)...");
   await uploadAsset(uploadUrl, path.join(__dirname, 'Luna-Windows.zip'), 'Luna-Windows.zip', 'application/zip');
-  await uploadAsset(uploadUrl, path.join(__dirname, 'RaveStreamer-Windows.zip'), 'RaveStreamer-Windows.zip', 'application/zip');
 
-  console.log("5. Uploading Android APK...");
+  console.log("5. Uploading Android APK (Luna.apk)...");
   await uploadAsset(uploadUrl, path.join(__dirname, 'Luna.apk'), 'Luna.apk', 'application/vnd.android.package-archive');
-  await uploadAsset(uploadUrl, path.join(__dirname, 'RaveStreamer.apk'), 'RaveStreamer.apk', 'application/vnd.android.package-archive');
 
   console.log(`Deployment of Luna ${releaseTag} complete!`);
 }

@@ -170,7 +170,19 @@ Future<Map<String, dynamic>> loadSettings() async {
   return {};
 }
 
-String globalAppVersion = "1.0.7";
+Map<String, String> _globalHostTokens = {};
+
+Future<void> saveHostToken(String roomId, String token) async {
+  _globalHostTokens[roomId] = token;
+  await saveSettings({'hostTokens': _globalHostTokens});
+}
+
+Future<void> removeHostToken(String roomId) async {
+  _globalHostTokens.remove(roomId);
+  await saveSettings({'hostTokens': _globalHostTokens});
+}
+
+String globalAppVersion = "1.0.8";
 
 bool isNewerVersion(String latest, String current) {
   try {
@@ -451,7 +463,7 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
     return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20, 32)}';
   }
 
-  late final String _clientId = _generateSecureClientId();
+  String _clientId = '';
 
   @override
   void initState() {
@@ -469,6 +481,14 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
           _chatFontSize = (data['chatFontSize'] as num).toDouble();
         }
         if (data.containsKey('username')) _savedUsername = data['username'] as String;
+        if (data.containsKey('clientId') && (data['clientId'] as String).isNotEmpty) {
+          _clientId = data['clientId'] as String;
+        }
+        if (data.containsKey('hostTokens') && data['hostTokens'] is Map) {
+          _globalHostTokens = Map<String, String>.from(
+            (data['hostTokens'] as Map).map((k, v) => MapEntry(k.toString(), v.toString()))
+          );
+        }
         if (data.containsKey('serverUrl')) {
           final sUrl = (data['serverUrl'] as String).trim();
           if (sUrl.isNotEmpty && 
@@ -482,6 +502,11 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
           }
         }
       });
+    }
+
+    if (_clientId.isEmpty) {
+      _clientId = _generateSecureClientId();
+      saveSettings({'clientId': _clientId});
     }
 
     // Check for updates directly from GitHub Releases API
@@ -1498,6 +1523,7 @@ class _RoomPageState extends State<RoomPage> {
   List<dynamic> _translators = [];
   String _currentPageUrl = ''; // original lordfilm/site URL (for translator switching)
   String? _hostUsername;
+  String? _hostToken;
 
   bool get _isHost {
     if (_isLocalStreamHost) return true;
@@ -1506,7 +1532,19 @@ class _RoomPageState extends State<RoomPage> {
         if (u['id'] == _socket.id && u['isHost'] == true) return true;
       }
     }
+    if (_hostToken != null && _hostToken!.isNotEmpty) return true;
     return false;
+  }
+
+  void _emitJoinRoom({String? passwordOverride}) {
+    final tok = _hostToken ?? _globalHostTokens[widget.roomId];
+    _socket.emit('join-room', {
+      'roomId': widget.roomId,
+      'username': widget.username,
+      'password': passwordOverride ?? widget.password,
+      'clientId': widget.clientId,
+      'hostToken': tok,
+    });
   }
   
   // Tabs, Chat & Localization States
@@ -1534,6 +1572,7 @@ class _RoomPageState extends State<RoomPage> {
     super.initState();
     _locale = widget.locale;
     _chatFontSize = widget.chatFontSize;
+    _hostToken = _globalHostTokens[widget.roomId];
     
     // Load stream settings
     loadSettings().then((data) {
@@ -1602,11 +1641,7 @@ class _RoomPageState extends State<RoomPage> {
                 onPressed: () {
                   Navigator.pop(ctx);
                   _socket.connect();
-                  _socket.emit('join-room', {
-                    'roomId': widget.roomId,
-                    'username': widget.username,
-                    'password': widget.password,
-                  });
+                  _emitJoinRoom();
                 },
                 child: Text(_locale == 'ru' ? 'Повторить' : 'Retry', style: const TextStyle(color: Color(0xFF6C63FF))),
               ),
@@ -1619,11 +1654,7 @@ class _RoomPageState extends State<RoomPage> {
                       _hasJoinedRoom = true;
                     });
                     _socket.connect();
-                    _socket.emit('join-room', {
-                      'roomId': widget.roomId,
-                      'username': widget.username,
-                      'password': widget.password,
-                    });
+                    _emitJoinRoom();
                   }
                 },
                 child: Text(_locale == 'ru' ? 'Всё равно продолжить' : 'Continue anyway', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
@@ -1758,11 +1789,7 @@ class _RoomPageState extends State<RoomPage> {
       // Request ICE servers dynamically
       _socket.emit('get-ice-servers', {'roomId': widget.roomId});
       // Join the specified room
-      _socket.emit('join-room', {
-        'roomId': widget.roomId,
-        'username': widget.username,
-        'password': widget.password,
-      });
+      _emitJoinRoom();
     });
 
     _socket.on('room-error', (msg) {
@@ -1817,11 +1844,7 @@ class _RoomPageState extends State<RoomPage> {
               ElevatedButton(
                 onPressed: () {
                   Navigator.pop(ctx);
-                  _socket.emit('join-room', {
-                    'roomId': widget.roomId,
-                    'username': widget.username,
-                    'password': pwController.text.trim(),
-                  });
+                  _emitJoinRoom(passwordOverride: pwController.text.trim());
                 },
                 style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00F2FE)),
                 child: Text(_locale == 'ru' ? 'Войти' : 'Join', style: const TextStyle(color: Colors.black)),
@@ -1956,6 +1979,16 @@ class _RoomPageState extends State<RoomPage> {
       final headers = data['headers'] is Map ? Map<String, dynamic>.from(data['headers'] as Map) : null;
       final isLive = data['isLiveStreaming'] == true;
       final hostUser = data['hostUsername']?.toString();
+      final isHostState = data['isHost'] == true;
+      final hostTok = data['hostToken']?.toString();
+
+      if (isHostState && hostTok != null && hostTok.isNotEmpty) {
+        _hostToken = hostTok;
+        saveHostToken(widget.roomId, hostTok);
+      } else if (!isHostState && _hostToken != null) {
+        _hostToken = null;
+        removeHostToken(widget.roomId);
+      }
 
       setState(() {
         _hasJoinedRoom = true;
@@ -2175,11 +2208,7 @@ class _RoomPageState extends State<RoomPage> {
     // Connect AFTER all event handlers are registered
     _socket.connect();
     if (_socket.connected) {
-      _socket.emit('join-room', {
-        'roomId': widget.roomId,
-        'username': widget.username,
-        'password': widget.password,
-      });
+      _emitJoinRoom();
     }
 
     // Auto-retry join-room after 3s if server response is slow
@@ -2188,11 +2217,7 @@ class _RoomPageState extends State<RoomPage> {
         if (!_socket.connected) {
           _socket.connect();
         }
-        _socket.emit('join-room', {
-          'roomId': widget.roomId,
-          'username': widget.username,
-          'password': widget.password,
-        });
+        _emitJoinRoom();
       }
     });
   }
@@ -2969,6 +2994,8 @@ class _RoomPageState extends State<RoomPage> {
       const roomId = ${jsonEncode(widget.roomId)};
       const password = ${jsonEncode(widget.password ?? '')};
       const username = ${jsonEncode('${widget.username}\u200B')};
+      const clientId = ${jsonEncode(widget.clientId)};
+      const hostToken = ${jsonEncode(_hostToken ?? _globalHostTokens[widget.roomId] ?? '')};
       const hostAppSocketId = ${jsonEncode(hostAppSocketId)};
       let localStream;
       let peerConnections = {};
@@ -2997,7 +3024,7 @@ class _RoomPageState extends State<RoomPage> {
 
       socket.on('connect', () => {
         document.getElementById('status').innerText = 'Подключено к серверу! Нажмите кнопку выше, чтобы выбрать вкладку.';
-        socket.emit('join-room', { roomId, username, password, isBroadcaster: true });
+        socket.emit('join-room', { roomId, username, password, clientId, hostToken, isBroadcaster: true });
         socket.emit('get-ice-servers', { roomId });
       });
 
