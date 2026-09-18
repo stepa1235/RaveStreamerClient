@@ -1770,7 +1770,7 @@ class _RoomPageState extends State<RoomPage> {
           _isLiveStreaming = true;
         });
       }
-      if (_isHost && _webrtcManager != null) {
+      if (_isHost && _webrtcManager != null && _webrtcManager!.localStream != null) {
         for (var user in _users) {
           final id = user['id'] as String;
           if (id != _socket.id) {
@@ -1796,9 +1796,12 @@ class _RoomPageState extends State<RoomPage> {
         });
         _triggerControlsVisibility();
         try { _mkPlayer?.pause(); } catch (_) {}
-        if (!_isLocalStreamHost) {
-          _socket.emit('new-viewer', {'roomId': widget.roomId, 'viewerId': _socket.id});
+        if (_isLocalStreamHost) {
+          _webrtcManager?.setAudioMuted(_hostAudioMuted);
+        } else {
+          _webrtcManager?.setAudioMuted(false);
         }
+        _socket.emit('new-viewer', {'roomId': widget.roomId, 'viewerId': _socket.id});
       }
     });
     _socket.on('stream-stopped', (_) {
@@ -1806,6 +1809,7 @@ class _RoomPageState extends State<RoomPage> {
         setState(() {
           _isLiveStreaming = false;
           _isLocalStreamHost = false;
+          _hostAudioMuted = true;
         });
         _webrtcManager?.clearRemoteStream();
         try { _localHttpServer?.close(force: true); } catch (_) {}
@@ -1942,7 +1946,7 @@ class _RoomPageState extends State<RoomPage> {
       });
       _usersNotifier.value = List.from(updatedUsers);
 
-      if (_webrtcManager != null && _isHost && _isLiveStreaming) {
+      if (_webrtcManager != null && _isHost && _isLiveStreaming && _webrtcManager!.localStream != null) {
         final currentIds = _users.map((u) => u['id'] as String).toSet();
         for (var user in data) {
           final id = user['id'] as String;
@@ -1983,7 +1987,7 @@ class _RoomPageState extends State<RoomPage> {
       if (newUser != null) {
         final username = newUser['username'] as String? ?? '';
         if (!username.endsWith('\u200B')) {
-          if (_webrtcManager != null && _isHost && _isLiveStreaming) {
+          if (_webrtcManager != null && _isHost && _isLiveStreaming && _webrtcManager!.localStream != null) {
             _webrtcManager!.createConnectionForViewer(newUser['id'] as String);
           }
           setState(() {
@@ -2044,9 +2048,12 @@ class _RoomPageState extends State<RoomPage> {
         });
         _triggerControlsVisibility();
         try { _mkPlayer?.pause(); } catch (_) {}
-        if (!_isLocalStreamHost) {
-          _socket.emit('new-viewer', {'roomId': widget.roomId, 'viewerId': _socket.id});
+        if (_isLocalStreamHost) {
+          _webrtcManager?.setAudioMuted(_hostAudioMuted);
+        } else {
+          _webrtcManager?.setAudioMuted(false);
         }
+        _socket.emit('new-viewer', {'roomId': widget.roomId, 'viewerId': _socket.id});
       } else if (videoUrl.isNotEmpty) {
         _setupVideoPlayer(videoUrl, videoName, startPlaying: isPlaying, startSeconds: calculatedTime, headers: headers);
       }
@@ -2965,14 +2972,36 @@ class _RoomPageState extends State<RoomPage> {
   }
 
   bool _isLocalStreamHost = false;
+  bool _hostAudioMuted = true;
+
+  void _stopStreamBroadcast() {
+    _socket.emit('stop-stream', {'roomId': widget.roomId});
+    try { _localHttpServer?.close(force: true); } catch (_) {}
+    _localHttpServer = null;
+    _webrtcManager?.clearRemoteStream();
+    if (mounted) {
+      setState(() {
+        _isLiveStreaming = false;
+        _isLocalStreamHost = false;
+        _hostAudioMuted = true;
+      });
+    }
+  }
 
   Future<void> _startBrowserBroadcast() async {
     _isLocalStreamHost = true;
+    _hostAudioMuted = true;
+    _webrtcManager?.setAudioMuted(true);
+    _webrtcManager?.clearRemoteStream();
+    if (mounted) {
+      setState(() {
+        _isLiveStreaming = true;
+      });
+    }
     try {
       try { await _localHttpServer?.close(force: true); } catch (_) {}
       _localHttpServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       final port = _localHttpServer!.port;
-      final hostAppSocketId = _socket.id;
       final rawServerUrl = widget.serverUrl.isEmpty ? 'http://127.0.0.1:3000' : widget.serverUrl;
       final serverUrl = rawServerUrl
           .replaceAll('wss://', 'https://')
@@ -3051,7 +3080,6 @@ class _RoomPageState extends State<RoomPage> {
       const username = ${jsonEncode('${widget.username}\u200B')};
       const clientId = ${jsonEncode(widget.clientId)};
       const hostToken = ${jsonEncode(_hostToken ?? _globalHostTokens[widget.roomId] ?? '')};
-      const hostAppSocketId = ${jsonEncode(hostAppSocketId)};
       let localStream;
       let peerConnections = {};
       let latestUsers = [];
@@ -3170,7 +3198,7 @@ class _RoomPageState extends State<RoomPage> {
           if (latestUsers && latestUsers.length > 0) {
             for (const user of latestUsers) {
               const uId = user.id || user;
-              if (uId && uId !== socket.id && uId !== hostAppSocketId && !peerConnections[uId]) {
+              if (uId && uId !== socket.id && !peerConnections[uId]) {
                 createOffer(uId);
               }
             }
@@ -3184,7 +3212,7 @@ class _RoomPageState extends State<RoomPage> {
       socket.on('new-viewer', async (data) => {
         if (!localStream) return;
         const vId = (data && data.viewerId) ? data.viewerId : data;
-        if (vId && vId !== socket.id && vId !== hostAppSocketId) {
+        if (vId && vId !== socket.id) {
           await createOffer(vId);
         }
       });
@@ -3194,7 +3222,7 @@ class _RoomPageState extends State<RoomPage> {
         if (!localStream) return;
         for (const user of latestUsers) {
           const uId = user.id || user;
-          if (uId && uId !== socket.id && uId !== hostAppSocketId && !peerConnections[uId]) {
+          if (uId && uId !== socket.id && !peerConnections[uId]) {
             await createOffer(uId);
           }
         }
@@ -3209,7 +3237,7 @@ class _RoomPageState extends State<RoomPage> {
       });
 
       async function createOffer(targetId) {
-        if (!localStream || !targetId || targetId === socket.id || targetId === hostAppSocketId) return;
+        if (!localStream || !targetId || targetId === socket.id) return;
         if (offerLocks[targetId]) return;
         offerLocks[targetId] = true;
 
@@ -3384,7 +3412,7 @@ class _RoomPageState extends State<RoomPage> {
     }
   }
 
-  Widget _buildHostStreamBanner() {
+  Widget _buildHostWaitingBanner() {
     return Container(
       color: const Color(0xFF100E1D),
       child: Center(
@@ -3398,50 +3426,41 @@ class _RoomPageState extends State<RoomPage> {
                 shape: BoxShape.circle,
               ),
               child: const Icon(
-                Icons.tab,
+                Icons.open_in_browser,
                 size: 56,
                 color: Color(0xFF00F2FE),
               ),
             ),
             const SizedBox(height: 20),
             Text(
-              _locale == 'ru' ? 'Трансляция вкладки активна' : 'Tab Stream Active',
+              _locale == 'ru' ? 'Ожидание выбора вкладки...' : 'Waiting for tab selection...',
               style: const TextStyle(
                 color: Colors.white,
                 fontSize: 20,
                 fontWeight: FontWeight.bold,
               ),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 10),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 32),
               child: Text(
                 _locale == 'ru'
-                    ? 'Воспроизведение и управление происходят в открытой вкладке браузера'
-                    : 'Playback and controls are running in your browser tab',
+                    ? 'В открывшемся браузере выберите вкладку с фильмом и нажмите «Поделиться».\nВаш стрим появится здесь сразу после выбора!'
+                    : 'In the opened browser window, choose your video tab and click "Share".\nYour stream will appear here immediately after!',
                 style: TextStyle(
-                  color: Colors.white.withOpacity(0.6),
+                  color: Colors.white.withOpacity(0.7),
                   fontSize: 13,
+                  height: 1.4,
                 ),
                 textAlign: TextAlign.center,
               ),
             ),
             const SizedBox(height: 24),
             ElevatedButton.icon(
-              onPressed: () {
-                _socket.emit('stop-stream', {'roomId': widget.roomId});
-                try { _localHttpServer?.close(force: true); } catch (_) {}
-                _localHttpServer = null;
-                if (mounted) {
-                  setState(() {
-                    _isLiveStreaming = false;
-                    _isLocalStreamHost = false;
-                  });
-                }
-              },
-              icon: const Icon(Icons.stop_screen_share, size: 18),
+              onPressed: _stopStreamBroadcast,
+              icon: const Icon(Icons.close, size: 18),
               label: Text(
-                _locale == 'ru' ? 'Остановить трансляцию' : 'Stop Stream',
+                _locale == 'ru' ? 'Отмена трансляции' : 'Cancel stream',
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
               style: ElevatedButton.styleFrom(
@@ -3605,16 +3624,15 @@ class _RoomPageState extends State<RoomPage> {
 
                         // Live video stream overlay (WebRTC)
                         if (_isLiveStreaming) ...[
-                          if (_isLocalStreamHost)
-                            _buildHostStreamBanner()
-                          else if (_webrtcManager != null &&
-                              _webrtcManager!.isPeerConnected &&
+                          if (_webrtcManager != null &&
                               _webrtcManager!.remoteRenderer.srcObject != null &&
                               _webrtcManager!.remoteRenderer.textureId != null)
                             RTCVideoView(
                               _webrtcManager!.remoteRenderer,
                               objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
                             )
+                          else if (_isLocalStreamHost)
+                            _buildHostWaitingBanner()
                           else
                             Center(
                               child: Column(
@@ -3744,7 +3762,77 @@ class _RoomPageState extends State<RoomPage> {
               children: [
                 Expanded(
                   child: (_isLiveStreaming || _currentVideoName == 'No Video Loaded' || _currentVideoUrl.isEmpty)
-                      ? const SizedBox.shrink()
+                      ? (_isLiveStreaming
+                          ? Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0x33E53935),
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(color: const Color(0xFFEF5350), width: 1.5),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(Icons.circle, color: Color(0xFFEF5350), size: 10),
+                                      const SizedBox(width: 6),
+                                      Text(
+                                        _isLocalStreamHost
+                                            ? (_locale == 'ru' ? 'ВАШ СТРИМ (В ЭФИРЕ)' : 'YOUR STREAM (LIVE)')
+                                            : (_locale == 'ru' ? 'ТРАНСЛЯЦИЯ ХОСТА' : 'HOST STREAM'),
+                                        style: const TextStyle(
+                                          color: Color(0xFFEF5350),
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.bold,
+                                          letterSpacing: 0.5,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                if (_isLocalStreamHost) ...[
+                                  const SizedBox(width: 8),
+                                  InkWell(
+                                    onTap: () {
+                                      setState(() {
+                                        _hostAudioMuted = !_hostAudioMuted;
+                                        _webrtcManager?.setAudioMuted(_hostAudioMuted);
+                                      });
+                                    },
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                                      decoration: BoxDecoration(
+                                        color: Colors.black54,
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(
+                                          color: _hostAudioMuted ? Colors.amber.withOpacity(0.5) : Colors.green.withOpacity(0.5),
+                                        ),
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(
+                                            _hostAudioMuted ? Icons.volume_off : Icons.volume_up,
+                                            color: _hostAudioMuted ? Colors.amberAccent : Colors.greenAccent,
+                                            size: 14,
+                                          ),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            _hostAudioMuted
+                                                ? (_locale == 'ru' ? 'Звук в плеере: выкл' : 'App sound: off')
+                                                : (_locale == 'ru' ? 'Звук в плеере: вкл' : 'App sound: on'),
+                                            style: const TextStyle(color: Colors.white, fontSize: 11),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            )
+                          : const SizedBox.shrink())
                       : Text(
                           _currentVideoName,
                           style: const TextStyle(
@@ -3757,6 +3845,27 @@ class _RoomPageState extends State<RoomPage> {
                           overflow: TextOverflow.ellipsis,
                         ),
                 ),
+                if (_isLiveStreaming && _isLocalStreamHost)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8.0),
+                    child: ElevatedButton.icon(
+                      onPressed: _stopStreamBroadcast,
+                      icon: const Icon(Icons.stop_screen_share, size: 16),
+                      label: Text(
+                        _locale == 'ru' ? 'Остановить' : 'Stop',
+                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.redAccent,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        minimumSize: Size.zero,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                    ),
+                  ),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
@@ -3833,7 +3942,7 @@ class _RoomPageState extends State<RoomPage> {
                       Expanded(
                         child: Row(
                           children: [
-                            if (_isLiveStreaming)
+                            if (_isLiveStreaming) ...[
                               Container(
                                 margin: const EdgeInsets.only(right: 12),
                                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
@@ -3865,8 +3974,26 @@ class _RoomPageState extends State<RoomPage> {
                                     ),
                                   ],
                                 ),
-                              )
-                            else if (isMeHost) ...[
+                              ),
+                              if (_isLocalStreamHost)
+                                Padding(
+                                  padding: const EdgeInsets.only(right: 12),
+                                  child: ElevatedButton.icon(
+                                    onPressed: _stopStreamBroadcast,
+                                    icon: const Icon(Icons.stop_screen_share, size: 16),
+                                    label: Text(
+                                      _locale == 'ru' ? 'Остановить стрим' : 'Stop Stream',
+                                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                                    ),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Colors.redAccent,
+                                      foregroundColor: Colors.white,
+                                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                                    ),
+                                  ),
+                                ),
+                            ] else if (isMeHost) ...[
                               IconButton(
                                 iconSize: 42,
                                 color: Colors.white,
@@ -4151,17 +4278,7 @@ class _RoomPageState extends State<RoomPage> {
                   const SizedBox(height: 8),
                   if (_isLiveStreaming)
                     ElevatedButton.icon(
-                      onPressed: () {
-                        _socket.emit('stop-stream', {'roomId': widget.roomId});
-                        try { _localHttpServer?.close(force: true); } catch (_) {}
-                        _localHttpServer = null;
-                        if (mounted) {
-                          setState(() {
-                            _isLiveStreaming = false;
-                            _isLocalStreamHost = false;
-                          });
-                        }
-                      },
+                      onPressed: _stopStreamBroadcast,
                       icon: const Icon(Icons.stop_screen_share, size: 18),
                       label: Text(
                         _locale == 'ru' ? 'Остановить трансляцию' : 'Stop Stream',

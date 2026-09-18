@@ -35,6 +35,25 @@ class WebRTCManager {
   Function()? onRenderUpdated;
   Function(String)? onError;
 
+  bool muteAudio = false;
+
+  void setAudioMuted(bool muted) {
+    muteAudio = muted;
+    try {
+      final stream = remoteRenderer.srcObject;
+      if (stream != null) {
+        for (var track in stream.getAudioTracks()) {
+          track.enabled = !muted;
+          try {
+            Helper.setVolume(muted ? 0.0 : 1.0, track);
+          } catch (_) {}
+        }
+      }
+    } catch (e) {
+      debugPrint('Error setting audio muted: $e');
+    }
+  }
+
   WebRTCManager({
     required this.socket, 
     required this.roomId, 
@@ -167,6 +186,12 @@ class WebRTCManager {
     final offerData = data['offer'];
     if (offerData is! Map) return;
     
+    final existingPc = peerConnections[senderId];
+    if (existingPc != null) {
+      try { existingPc.close(); } catch (_) {}
+      peerConnections.remove(senderId);
+    }
+
     final pc = await createPeerConnection(configuration);
     peerConnections[senderId] = pc;
 
@@ -207,6 +232,12 @@ class WebRTCManager {
       if (remoteRenderer.srcObject != stream) {
         remoteRenderer.srcObject = stream;
       }
+      if (muteAudio) {
+        for (var track in stream.getAudioTracks()) {
+          track.enabled = false;
+          try { Helper.setVolume(0.0, track); } catch (_) {}
+        }
+      }
       isPeerConnected = true;
       onStreamStarted?.call();
       onRenderUpdated?.call();
@@ -215,15 +246,28 @@ class WebRTCManager {
     pc.onTrack = (event) async {
       debugPrint('Got remote track: ${event.track.kind}, streams: ${event.streams.length}');
       if (event.track.kind == 'audio') {
-        event.track.enabled = true;
+        event.track.enabled = !muteAudio;
+        if (muteAudio) {
+          try { Helper.setVolume(0.0, event.track); } catch (_) {}
+        }
       }
       if (event.streams.isNotEmpty) {
         if (remoteRenderer.srcObject != event.streams[0]) {
           remoteRenderer.srcObject = event.streams[0];
+          if (muteAudio) {
+            for (var t in remoteRenderer.srcObject!.getAudioTracks()) {
+              t.enabled = false;
+              try { Helper.setVolume(0.0, t); } catch (_) {}
+            }
+          }
         }
       } else {
         try {
           remoteRenderer.srcObject ??= await createLocalMediaStream('remote_stream_${DateTime.now().millisecondsSinceEpoch}');
+          if (event.track.kind == 'audio' && muteAudio) {
+            event.track.enabled = false;
+            try { Helper.setVolume(0.0, event.track); } catch (_) {}
+          }
           remoteRenderer.srcObject!.addTrack(event.track);
         } catch (e) {
           debugPrint('Failed to add track to remote stream: $e');
@@ -350,6 +394,7 @@ class WebRTCManager {
     peerConnections.clear();
     _iceCandidateQueue.clear();
     _hasRemoteDescription.clear();
+    muteAudio = false;
     onRenderUpdated?.call();
   }
 
