@@ -25,7 +25,7 @@ if (!token) {
   process.exit(1);
 }
 const repo = 'stepa1235/RaveStreamerClient';
-const releaseTag = 'v1.1.0';
+const releaseTag = 'v1.1.1';
 
 const headers = {
   'Authorization': `Bearer ${token}`,
@@ -135,7 +135,7 @@ async function updateGist() {
         'ravestreamer.json': {
           content: JSON.stringify({
             url: currentUrl,
-            latest_version: '1.1.0',
+            latest_version: '1.1.1',
             android_url: `https://github.com/${repo}/releases/download/${releaseTag}/Luna.apk`,
             windows_url: `https://github.com/${repo}/releases/download/${releaseTag}/Luna-Windows.zip`
           }, null, 2)
@@ -158,7 +158,7 @@ async function deploy() {
   }, JSON.stringify({
     tag_name: releaseTag,
     name: `Luna ${releaseTag}`,
-    body: 'Luna v1.1.0\n\n- Эмодзи-реакции на сообщения в чате (❤️, 😂, 👍, 🔥, 😮, 😢)\n- Ответы (reply) на сообщения с цитированием автора и текста\n- Прикрепление фото и GIF в чате (через выбор файла, подборку популярных GIF или прямую ссылку)\n- Убран дублирующийся бейдж "В эфире" — теперь отображается один аккуратный статус\n- Исправлен скролл чата: вкладки используют IndexedStack (чат не улетает вверх при переходе в настройки) и надежный автопрокрут вниз с плавающей кнопкой'
+    body: 'Luna v1.1.1\n\n- Новое всплывающее меню реакций и действий в стиле Telegram (плавающая капсула эмодзи с мягким блюром и компактное контекстное меню ответов)\n- Расширенный набор реакций (❤️, 👍, 👎, 🔥, 😂, 😮, 😢, 👏, 🎉)\n- Быстрый доступ к меню действий по клику на сообщение, долгому нажатию и правой кнопке мыши\n- Стилизованные Telegram-плашки реакций под сообщениями и обновленная панель цитирования'
   }));
 
   const uploadUrl = release.upload_url;

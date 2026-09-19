@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -201,7 +202,7 @@ Future<void> removeHostToken(String roomId) async {
   await saveSettings({'hostTokens': _globalHostTokens});
 }
 
-String globalAppVersion = "1.1.0";
+String globalAppVersion = "1.1.1";
 
 bool isNewerVersion(String latest, String current) {
   try {
@@ -2329,7 +2330,7 @@ class _RoomPageState extends State<RoomPage> {
     {'title': 'Слёзы', 'url': 'https://media.giphy.com/media/d2lcHJTG5Tscg/giphy.gif'},
   ];
 
-  static const List<String> _quickEmojis = ['❤️', '😂', '👍', '🔥', '😮', '😢'];
+  static const List<String> _quickEmojis = ['❤️', '👍', '👎', '🔥', '😂', '😮', '😢', '👏', '🎉'];
 
   int _lastChatSentMs = 0;
 
@@ -5168,78 +5169,247 @@ class _RoomPageState extends State<RoomPage> {
   }
 
   void _showMessageActions(Map<String, dynamic> msg) {
-    showModalBottomSheet(
+    try {
+      HapticFeedback.lightImpact();
+    } catch (_) {}
+
+    showGeneralDialog(
       context: context,
-      backgroundColor: const Color(0xFF1E2028),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 36,
-                  height: 4,
-                  decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
-                ),
-                const SizedBox(height: 16),
-                // Quick emoji reactions row
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: _quickEmojis.map((emoji) {
-                    final reactions = msg['reactions'] is Map ? (msg['reactions'] as Map) : {};
-                    final hasReacted = reactions[emoji] is List && (reactions[emoji] as List).contains(widget.username);
-                    return InkWell(
-                      onTap: () {
-                        Navigator.pop(ctx);
-                        _toggleReaction(msg['id'] ?? '', emoji);
-                      },
-                      borderRadius: BorderRadius.circular(24),
+      barrierDismissible: true,
+      barrierLabel: 'TG_ACTIONS',
+      barrierColor: Colors.black.withOpacity(0.45),
+      transitionDuration: const Duration(milliseconds: 200),
+      pageBuilder: (ctx, anim1, anim2) => const SizedBox(),
+      transitionBuilder: (ctx, anim, secondaryAnim, child) {
+        final curved = CurvedAnimation(parent: anim, curve: Curves.easeOutBack);
+        final reactions = (msg['reactions'] is Map) ? (msg['reactions'] as Map) : {};
+        final hasImage = msg['imageUrl'] != null && (msg['imageUrl'] as String).trim().isNotEmpty;
+        final hasText = msg['text'] != null && (msg['text'] as String).trim().isNotEmpty;
+
+        return BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => Navigator.of(ctx).pop(),
+            child: Scaffold(
+              backgroundColor: Colors.transparent,
+              body: Center(
+                child: ScaleTransition(
+                  scale: Tween<double>(begin: 0.85, end: 1.0).animate(curved),
+                  child: FadeTransition(
+                    opacity: anim,
+                    child: GestureDetector(
+                      onTap: () {}, // prevent closing when clicking inside
                       child: Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: hasReacted ? const Color(0xFF00F2FE).withOpacity(0.25) : Colors.white.withOpacity(0.05),
-                          shape: BoxShape.circle,
-                          border: hasReacted ? Border.all(color: const Color(0xFF00F2FE)) : null,
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        constraints: const BoxConstraints(maxWidth: 360),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            // 1. Telegram Floating Emoji Reactions Capsule
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF1E2333).withOpacity(0.96),
+                                borderRadius: BorderRadius.circular(30),
+                                border: Border.all(
+                                  color: Colors.white.withOpacity(0.12),
+                                  width: 1,
+                                ),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.45),
+                                    blurRadius: 20,
+                                    offset: const Offset(0, 8),
+                                  ),
+                                ],
+                              ),
+                              child: SingleChildScrollView(
+                                scrollDirection: Axis.horizontal,
+                                physics: const BouncingScrollPhysics(),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: _quickEmojis.map((emoji) {
+                                    final hasReacted = reactions[emoji] is List && (reactions[emoji] as List).contains(widget.username);
+                                    return Padding(
+                                      padding: const EdgeInsets.symmetric(horizontal: 2.5),
+                                      child: Material(
+                                        color: Colors.transparent,
+                                        child: InkWell(
+                                          onTap: () {
+                                            Navigator.of(ctx).pop();
+                                            _toggleReaction(msg['id'] ?? '', emoji);
+                                          },
+                                          borderRadius: BorderRadius.circular(20),
+                                          splashColor: const Color(0xFF00F2FE).withOpacity(0.3),
+                                          hoverColor: Colors.white.withOpacity(0.08),
+                                          child: AnimatedContainer(
+                                            duration: const Duration(milliseconds: 150),
+                                            padding: const EdgeInsets.all(6),
+                                            decoration: BoxDecoration(
+                                              shape: BoxShape.circle,
+                                              color: hasReacted
+                                                  ? const Color(0xFF00F2FE).withOpacity(0.25)
+                                                  : Colors.transparent,
+                                              border: hasReacted
+                                                  ? Border.all(color: const Color(0xFF00F2FE), width: 1.5)
+                                                  : null,
+                                            ),
+                                            child: Text(
+                                              emoji,
+                                              style: const TextStyle(fontSize: 24),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  }).toList(),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            // 2. Telegram Floating Actions Context Menu
+                            Container(
+                              width: 230,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF1E2333).withOpacity(0.97),
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                  color: Colors.white.withOpacity(0.12),
+                                  width: 1,
+                                ),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.38),
+                                    blurRadius: 22,
+                                    offset: const Offset(0, 10),
+                                  ),
+                                ],
+                              ),
+                              clipBehavior: Clip.antiAlias,
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  // Reply action
+                                  _buildTgMenuItem(
+                                    icon: Icons.reply_rounded,
+                                    iconColor: const Color(0xFF00F2FE),
+                                    label: _locale == 'ru' ? 'Ответить' : 'Reply',
+                                    onTap: () {
+                                      Navigator.of(ctx).pop();
+                                      _startReply(msg);
+                                    },
+                                  ),
+                                  // Copy text action
+                                  if (hasText) ...[
+                                    _buildTgMenuDivider(),
+                                    _buildTgMenuItem(
+                                      icon: Icons.copy_rounded,
+                                      iconColor: Colors.white70,
+                                      label: _locale == 'ru' ? 'Копировать' : 'Copy text',
+                                      onTap: () {
+                                        Clipboard.setData(ClipboardData(text: msg['text'] as String));
+                                        Navigator.of(ctx).pop();
+                                        if (mounted) {
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            SnackBar(
+                                              content: Text(_locale == 'ru' ? 'Скопировано в буфер' : 'Copied to clipboard'),
+                                              duration: const Duration(seconds: 1),
+                                            ),
+                                          );
+                                        }
+                                      },
+                                    ),
+                                  ],
+                                  // Image-specific actions
+                                  if (hasImage) ...[
+                                    _buildTgMenuDivider(),
+                                    _buildTgMenuItem(
+                                      icon: Icons.fullscreen_rounded,
+                                      iconColor: const Color(0xFF00F2FE),
+                                      label: _locale == 'ru' ? 'Открыть фото' : 'Open photo',
+                                      onTap: () {
+                                        Navigator.of(ctx).pop();
+                                        _showFullscreenImage(msg['imageUrl']);
+                                      },
+                                    ),
+                                    _buildTgMenuDivider(),
+                                    _buildTgMenuItem(
+                                      icon: Icons.link_rounded,
+                                      iconColor: Colors.white70,
+                                      label: _locale == 'ru' ? 'Скопировать ссылку' : 'Copy link',
+                                      onTap: () {
+                                        Clipboard.setData(ClipboardData(text: msg['imageUrl'] as String));
+                                        Navigator.of(ctx).pop();
+                                        if (mounted) {
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            SnackBar(
+                                              content: Text(_locale == 'ru' ? 'Ссылка скопирована' : 'Link copied'),
+                                              duration: const Duration(seconds: 1),
+                                            ),
+                                          );
+                                        }
+                                      },
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ],
                         ),
-                        child: Text(emoji, style: const TextStyle(fontSize: 22)),
                       ),
-                    );
-                  }).toList(),
-                ),
-                const Divider(color: Colors.white12, height: 24),
-                ListTile(
-                  leading: const Icon(Icons.reply, color: Color(0xFF00F2FE)),
-                  title: Text(_locale == 'ru' ? 'Ответить' : 'Reply', style: const TextStyle(color: Colors.white, fontSize: 14)),
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _startReply(msg);
-                  },
-                ),
-                if (msg['text'] != null && (msg['text'] as String).isNotEmpty)
-                  ListTile(
-                    leading: const Icon(Icons.copy, color: Colors.white70),
-                    title: Text(_locale == 'ru' ? 'Копировать текст' : 'Copy text', style: const TextStyle(color: Colors.white, fontSize: 14)),
-                    onTap: () {
-                      Clipboard.setData(ClipboardData(text: msg['text'] as String));
-                      Navigator.pop(ctx);
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(_locale == 'ru' ? 'Скопировано в буфер' : 'Copied to clipboard'),
-                          duration: const Duration(seconds: 1),
-                        ),
-                      );
-                    },
+                    ),
                   ),
-              ],
+                ),
+              ),
             ),
           ),
         );
       },
+    );
+  }
+
+  Widget _buildTgMenuItem({
+    required IconData icon,
+    required Color iconColor,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        splashColor: const Color(0xFF00F2FE).withOpacity(0.15),
+        hoverColor: Colors.white.withOpacity(0.06),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+          child: Row(
+            children: [
+              Icon(icon, size: 20, color: iconColor),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Text(
+                  label,
+                  style: const TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w500,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTgMenuDivider() {
+    return Divider(
+      height: 1,
+      thickness: 1,
+      color: Colors.white.withOpacity(0.06),
     );
   }
 
@@ -5297,6 +5467,7 @@ class _RoomPageState extends State<RoomPage> {
                               crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
                               children: [
                                 GestureDetector(
+                                  onTap: () => _showMessageActions(msg),
                                   onSecondaryTap: () => _showMessageActions(msg),
                                   onLongPress: () => _showMessageActions(msg),
                                   child: Container(
@@ -5476,36 +5647,43 @@ class _RoomPageState extends State<RoomPage> {
                                       final emoji = entry.key;
                                       final users = List<dynamic>.from(entry.value);
                                       final hasReacted = users.contains(widget.username);
-                                      return InkWell(
-                                        onTap: () => _toggleReaction(msg['id'] ?? '', emoji),
-                                        borderRadius: BorderRadius.circular(12),
-                                        child: Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                          decoration: BoxDecoration(
-                                            color: hasReacted ? const Color(0xFF00F2FE).withOpacity(0.2) : Colors.white.withOpacity(0.06),
-                                            borderRadius: BorderRadius.circular(12),
-                                            border: Border.all(
-                                              color: hasReacted ? const Color(0xFF00F2FE) : Colors.white24,
-                                              width: 1,
-                                            ),
-                                          ),
-                                          child: Row(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              Text(emoji, style: const TextStyle(fontSize: 11)),
-                                              const SizedBox(width: 3),
-                                              Text(
-                                                '${users.length}',
-                                                style: TextStyle(
-                                                  fontSize: 10,
-                                                  fontWeight: FontWeight.bold,
-                                                  color: hasReacted ? const Color(0xFF00F2FE) : Colors.white70,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      );
+                                       return InkWell(
+                                         onTap: () => _toggleReaction(msg['id'] ?? '', emoji),
+                                         borderRadius: BorderRadius.circular(16),
+                                         child: Container(
+                                           padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
+                                           decoration: BoxDecoration(
+                                             color: hasReacted ? const Color(0xFF00F2FE).withOpacity(0.22) : const Color(0xFF222838).withOpacity(0.8),
+                                             borderRadius: BorderRadius.circular(16),
+                                             border: Border.all(
+                                               color: hasReacted ? const Color(0xFF00F2FE).withOpacity(0.85) : Colors.white.withOpacity(0.12),
+                                               width: 1,
+                                             ),
+                                             boxShadow: [
+                                               BoxShadow(
+                                                 color: Colors.black.withOpacity(0.2),
+                                                 blurRadius: 4,
+                                                 offset: const Offset(0, 1),
+                                               ),
+                                             ],
+                                           ),
+                                           child: Row(
+                                             mainAxisSize: MainAxisSize.min,
+                                             children: [
+                                               Text(emoji, style: const TextStyle(fontSize: 12.5)),
+                                               const SizedBox(width: 4),
+                                               Text(
+                                                 '${users.length}',
+                                                 style: TextStyle(
+                                                   fontSize: 11,
+                                                   fontWeight: FontWeight.bold,
+                                                   color: hasReacted ? const Color(0xFF00F2FE) : Colors.white70,
+                                                 ),
+                                               ),
+                                             ],
+                                           ),
+                                         ),
+                                       );
                                     }).toList(),
                                   ),
                                 ],
@@ -5542,16 +5720,23 @@ class _RoomPageState extends State<RoomPage> {
             margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
             decoration: BoxDecoration(
-              color: const Color(0xFF1E2028),
+              color: const Color(0xFF1A1F2C),
               borderRadius: BorderRadius.circular(10),
               border: Border.all(color: const Color(0xFF00F2FE).withOpacity(0.35)),
             ),
             child: Row(
               children: [
-                Container(width: 3, height: 26, color: const Color(0xFF00F2FE)),
+                Container(
+                  width: 3,
+                  height: 28,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF00F2FE),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
                 const SizedBox(width: 8),
-                const Icon(Icons.reply, size: 16, color: Color(0xFF00F2FE)),
-                const SizedBox(width: 6),
+                const Icon(Icons.reply_rounded, size: 18, color: Color(0xFF00F2FE)),
+                const SizedBox(width: 8),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -5565,13 +5750,14 @@ class _RoomPageState extends State<RoomPage> {
                         _replyingTo!['text'] ?? '',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.7)),
+                        style: TextStyle(fontSize: 10.5, color: Colors.white70),
                       ),
                     ],
                   ),
                 ),
                 InkWell(
                   onTap: () => setState(() => _replyingTo = null),
+                  borderRadius: BorderRadius.circular(12),
                   child: const Padding(
                     padding: EdgeInsets.all(4),
                     child: Icon(Icons.close, size: 16, color: Colors.white60),
