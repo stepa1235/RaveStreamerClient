@@ -1,14 +1,31 @@
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
 
-const token = (process.env.GITHUB_TOKEN || process.env.TOKEN || '').trim();
+let token = (process.env.GITHUB_TOKEN || process.env.TOKEN || '').trim();
+if (!token) {
+  try {
+    const creds = execSync('git credential fill', {
+      input: 'protocol=https\nhost=github.com\n\n',
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'ignore']
+    });
+    const match = creds.match(/password=(.+)/);
+    if (match) {
+      token = match[1].trim();
+    }
+  } catch (e) {
+    // ignore
+  }
+}
+
 if (!token) {
   console.error('ERROR: GITHUB_TOKEN or TOKEN environment variable is required to deploy.');
   process.exit(1);
 }
 const repo = 'stepa1235/RaveStreamerClient';
-const releaseTag = 'v1.0.9';
+const releaseTag = 'v1.1.0';
 
 const headers = {
   'Authorization': `Bearer ${token}`,
@@ -98,6 +115,39 @@ async function uploadAsset(uploadUrl, filePath, name, contentType) {
   });
 }
 
+async function updateGist() {
+  const gistId = '0811a2ec6e74b06965de32f61643da5b';
+  console.log('6. Updating Gist with v1.1.0 update info...');
+  try {
+    let currentUrl = 'https://stepan1235-ravestreamer.hf.space';
+    try {
+      const cur = await request(`https://api.github.com/gists/${gistId}`);
+      if (cur && cur.files && cur.files['ravestreamer.json']) {
+        const parsed = JSON.parse(cur.files['ravestreamer.json'].content);
+        if (parsed.url) currentUrl = parsed.url;
+      }
+    } catch (_) {}
+
+    await request(`https://api.github.com/gists/${gistId}`, {
+      method: 'PATCH'
+    }, JSON.stringify({
+      files: {
+        'ravestreamer.json': {
+          content: JSON.stringify({
+            url: currentUrl,
+            latest_version: '1.1.0',
+            android_url: `https://github.com/${repo}/releases/download/${releaseTag}/Luna.apk`,
+            windows_url: `https://github.com/${repo}/releases/download/${releaseTag}/Luna-Windows.zip`
+          }, null, 2)
+        }
+      }
+    }));
+    console.log('Gist updated successfully!');
+  } catch (e) {
+    console.log('Failed to update Gist:', e.message);
+  }
+}
+
 async function deploy() {
   await deleteExistingRelease();
   await deleteExistingTag();
@@ -108,7 +158,7 @@ async function deploy() {
   }, JSON.stringify({
     tag_name: releaseTag,
     name: `Luna ${releaseTag}`,
-    body: 'Luna v1.0.9 - Live reactive participants dialog updates in real time, localized system notifications in chat with stylish centered badge UI, and expanded user settings (quality preferences, timestamps, sync tolerance, auto-scroll, sound alerts, compact chat).'
+    body: 'Luna v1.1.0\n\n- Эмодзи-реакции на сообщения в чате (❤️, 😂, 👍, 🔥, 😮, 😢)\n- Ответы (reply) на сообщения с цитированием автора и текста\n- Прикрепление фото и GIF в чате (через выбор файла, подборку популярных GIF или прямую ссылку)\n- Убран дублирующийся бейдж "В эфире" — теперь отображается один аккуратный статус\n- Исправлен скролл чата: вкладки используют IndexedStack (чат не улетает вверх при переходе в настройки) и надежный автопрокрут вниз с плавающей кнопкой'
   }));
 
   const uploadUrl = release.upload_url;
@@ -118,6 +168,8 @@ async function deploy() {
 
   console.log("5. Uploading Android APK (Luna.apk)...");
   await uploadAsset(uploadUrl, path.join(__dirname, 'Luna.apk'), 'Luna.apk', 'application/vnd.android.package-archive');
+
+  await updateGist();
 
   console.log(`Deployment of Luna ${releaseTag} complete!`);
 }
