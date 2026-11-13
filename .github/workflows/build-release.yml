@@ -2,12 +2,19 @@ name: Build Luna release
 
 on:
   workflow_dispatch:
+    inputs:
+      platform:
+        description: Platforms to build
+        type: choice
+        options: [both, windows, android]
+        default: both
 
 permissions:
   contents: read
 
 jobs:
   windows:
+    if: inputs.platform != 'android'
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
@@ -32,6 +39,7 @@ jobs:
           if-no-files-found: error
 
   android:
+    if: inputs.platform != 'windows'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -45,8 +53,16 @@ jobs:
           channel: stable
       - name: Install Android build tools
         run: |
-          yes | sdkmanager --licenses >/dev/null || test "${PIPESTATUS[1]}" -eq 0
-          sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358'
+          sdk="${ANDROID_HOME:-$RUNNER_TEMP/android-sdk}"
+          mkdir -p "$sdk/cmdline-tools" "$RUNNER_TEMP/android-tools"
+          curl -fsSL --retry 3 https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o "$RUNNER_TEMP/android-tools.zip"
+          unzip -q "$RUNNER_TEMP/android-tools.zip" -d "$RUNNER_TEMP/android-tools"
+          mv "$RUNNER_TEMP/android-tools/cmdline-tools" "$sdk/cmdline-tools/luna"
+          manager="$sdk/cmdline-tools/luna/bin/sdkmanager"
+          yes | "$manager" --sdk_root="$sdk" --licenses >/dev/null
+          "$manager" --sdk_root="$sdk" 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358'
+          echo "ANDROID_HOME=$sdk" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$sdk" >> "$GITHUB_ENV"
       - name: Test and build Android
         working-directory: client_android
         run: |
