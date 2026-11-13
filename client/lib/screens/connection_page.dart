@@ -1,9 +1,7 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
+import 'package:luna_updates/luna_updates.dart';
 import '../core/constants/localization.dart';
 import '../core/theme/app_theme.dart';
 import '../core/services/update_service.dart';
@@ -264,128 +262,15 @@ class _ConnectionPageState extends State<ConnectionPage> {
     if (saved == true) {
       widget.onPreferencesSaved(locale, theme, fontSize);
     } else if (saved == false) {
-      await _fetchVersionFromServer(_serverController.text.trim(), verbose: true);
-    }
-  }
-
-  Future<void> _fetchVersionFromServer(String dummy, {bool verbose = false}) async {
-    try {
-      final releaseRes = await http.get(
-        Uri.parse('https://api.github.com/repos/stepa1235/RaveStreamerClient/releases/latest'),
-        headers: {
-          'User-Agent': 'LunaApp/1.0',
-          'Accept': 'application/vnd.github.v3+json',
-          'Cache-Control': 'no-cache',
-        },
-      ).timeout(const Duration(seconds: 5));
-
-      if (releaseRes.statusCode == 200) {
-        final releaseData = jsonDecode(releaseRes.body) as Map<String, dynamic>;
-        final tagName = (releaseData['tag_name'] as String? ?? '').replaceAll('v', '');
-        final assets = (releaseData['assets'] as List<dynamic>? ?? []);
-
-        String apkUrl = '';
-        String winUrl = '';
-        for (var asset in assets) {
-          final name = asset['name'] as String? ?? '';
-          final url = asset['browser_download_url'] as String? ?? '';
-          if (name.endsWith('.apk')) apkUrl = url;
-          if (name.endsWith('.zip')) winUrl = url;
-        }
-
-        if (tagName.isNotEmpty) {
-          if (_isNewerVersion(tagName, globalAppVersion)) {
-            final url = Platform.isWindows ? winUrl : apkUrl;
-            if (url.isNotEmpty && mounted) {
-              _showUpdateDialog(tagName, url);
-              return;
-            }
-          } else if (verbose && mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(widget.locale == 'ru' ? 'У вас установлена последняя версия Luna!' : 'You have the latest version of Luna!'),
-                backgroundColor: const Color(0xFF00F2FE),
-              ),
-            );
-            return;
-          }
-        }
-      }
-    } catch (e) {
-      debugPrint('GitHub Releases API check error: $e');
-    }
-
-    if (verbose && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(widget.locale == 'ru' ? 'У вас установлена последняя версия Luna!' : 'You have the latest version of Luna!'),
-          backgroundColor: const Color(0xFF00F2FE),
-        ),
+      await checkLunaUpdate(
+        this.context,
+        currentVersion: globalAppVersion,
+        locale: widget.locale,
+        platform: UpdatePlatform.windows,
+        install: installWindowsUpdate,
+        manual: true,
       );
     }
-  }
-
-  bool _isNewerVersion(String latest, String current) {
-    try {
-      final cleanLatest = latest.split('+')[0];
-      final cleanCurrent = current.split('+')[0];
-      final lParts = cleanLatest.split('.').map(int.parse).toList();
-      final cParts = cleanCurrent.split('.').map(int.parse).toList();
-      for (int i = 0; i < lParts.length && i < cParts.length; i++) {
-        if (lParts[i] > cParts[i]) return true;
-        if (lParts[i] < cParts[i]) return false;
-      }
-      return lParts.length > cParts.length;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  void _showUpdateDialog(String version, String downloadUrl) {
-    final activeTheme = appThemes[widget.themeName] ?? appThemes['Dark']!;
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (BuildContext dialogContext) {
-        return AlertDialog(
-          backgroundColor: activeTheme.cardColor,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16.0),
-            side: BorderSide(color: activeTheme.primary.withOpacity(0.3), width: 1),
-          ),
-          title: Text(
-            widget.locale == 'ru' ? 'Доступно обновление v$version! 🚀' : 'Update Available v$version! 🚀',
-            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                widget.locale == 'ru'
-                    ? 'Вышла новая версия Luna v$version.\nНажмите ссылку ниже для скачивания:'
-                    : 'A new version of Luna v$version is available.\nClick link below to download:',
-                style: const TextStyle(color: Colors.white70, fontSize: 13),
-              ),
-              const SizedBox(height: 12),
-              SelectableText(
-                downloadUrl,
-                style: const TextStyle(color: Color(0xFF00F2FE), fontSize: 11, decoration: TextDecoration.underline),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: Text(
-                widget.locale == 'ru' ? 'Закрыть' : 'Close',
-                style: const TextStyle(color: Colors.white54),
-              ),
-            ),
-          ],
-        );
-      },
-    );
   }
 
   @override

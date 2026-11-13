@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'package:http/http.dart' as http;
+import 'package:luna_updates/luna_updates.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:webview_windows/webview_windows.dart';
 import 'package:local_notifier/local_notifier.dart';
@@ -5488,94 +5489,18 @@ class _RoomPageState extends State<RoomPage> {
                   ],
                 ),
                 const SizedBox(height: 10),
-                () {
-                  bool isCheckingUpdates = false;
-                  return StatefulBuilder(
-                    builder: (ctx, setLocalState) {
-                      return ElevatedButton.icon(
-                        onPressed: isCheckingUpdates ? null : () async {
-                          setLocalState(() => isCheckingUpdates = true);
-                          try {
-                            final verUrl = 'http://luna.lumigrid.ru:3000/version';
-                            final response = await http.get(Uri.parse(verUrl)).timeout(const Duration(seconds: 5));
-                            if (response.statusCode == 200) {
-                              final jsonData = jsonDecode(response.body) as Map<String, dynamic>;
-                              final latestVersion = jsonData['latest_version'] as String? ?? '';
-                              final currentVersion = globalAppVersion;
-                              if (latestVersion.isNotEmpty && isNewerVersion(latestVersion, currentVersion)) {
-                                String downloadUrl = jsonData['windows_url'] as String? ?? '';
-                              if (!mounted) return;
-                              showDialog(
-                                context: context,
-                                builder: (ctx) => AlertDialog(
-                                  backgroundColor: const Color(0xFF161426),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                                  title: Text(_locale == 'ru' ? 'Доступно обновление! 🚀' : 'Update Available! 🚀',
-                                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                                  content: Text(
-                                    _locale == 'ru'
-                                        ? 'Доступна новая версия v$latestVersion (текущая v$globalAppVersion).\nХотите обновиться?'
-                                        : 'A new version v$latestVersion is available (current v$globalAppVersion).\nDo you want to update?',
-                                    style: const TextStyle(color: Colors.white70),
-                                  ),
-                                  actions: [
-                                    TextButton(
-                                      onPressed: () => Navigator.of(ctx).pop(),
-                                      child: Text(_locale == 'ru' ? 'Позже' : 'Later',
-                                        style: const TextStyle(color: Colors.white54)),
-                                    ),
-                                    ElevatedButton.icon(
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: const Color(0xFF6C63FF),
-                                        foregroundColor: Colors.white,
-                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                                      ),
-                                      icon: const Icon(Icons.downloading, size: 16),
-                                      onPressed: () async {
-                                        Navigator.of(ctx).pop();
-                                        if (downloadUrl.isNotEmpty) {
-                                          downloadAndInstallUpdateWindows(context, downloadUrl, latestVersion, locale: _locale);
-                                        }
-                                      },
-                                      label: Text(_locale == 'ru' ? 'Авто-Обновление v$latestVersion' : 'Auto-Install v$latestVersion',
-                                        style: const TextStyle(fontWeight: FontWeight.bold)),
-                                    ),
-                                  ],
-                                ),
-                              );
-                            } else {
-                              if (!mounted) return;
-                              /* SnackBar disabled */
-                            }
-                          } else {
-                            throw Exception('HTTP ${response.statusCode}');
-                          }
-                        } catch (e) {
-                          if (!mounted) return;
-                          /* SnackBar disabled */
-                        } finally {
-                          setLocalState(() => isCheckingUpdates = false);
-                        }
-                      },
-                      icon: isCheckingUpdates
-                          ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                          : const Icon(Icons.system_update_alt, size: 14),
-                      label: Text(
-                        isCheckingUpdates
-                            ? (_locale == 'ru' ? 'Проверка...' : 'Checking...')
-                            : (_locale == 'ru' ? 'Проверить обновления' : 'Check for Updates'),
-                        style: const TextStyle(fontSize: 12),
-                      ),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF6C63FF),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 10),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                      ),
-                    );
-                  },
-                );
-              }(),
+                ElevatedButton.icon(
+                  onPressed: () => checkLunaUpdate(
+                    context,
+                    currentVersion: globalAppVersion,
+                    locale: _locale,
+                    platform: UpdatePlatform.windows,
+                    install: installWindowsUpdate,
+                    manual: true,
+                  ),
+                  icon: const Icon(Icons.system_update_alt, size: 14),
+                  label: Text(_locale == 'ru' ? 'Проверить обновления' : 'Check for updates'),
+                ),
               ],
             ),
           ),

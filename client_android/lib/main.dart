@@ -14,7 +14,7 @@ import 'package:http/http.dart' as http;
 import 'package:window_manager/window_manager.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:open_filex/open_filex.dart';
+import 'package:luna_updates/luna_updates.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'webrtc_manager.dart';
 import 'package:file_picker/file_picker.dart';
@@ -208,36 +208,20 @@ Future<void> removeHostToken(String roomId) async {
 
 String globalAppVersion = "1.1.1";
 
-bool isNewerVersion(String latest, String current) {
-  try {
-    final cleanLatest = latest.split('+')[0];
-    final cleanCurrent = current.split('+')[0];
-    List<int> parse(String v) => v.split('.').map((e) => int.tryParse(e.replaceAll(RegExp(r'\D'), '')) ?? 0).toList();
-    final l = parse(cleanLatest);
-    final c = parse(cleanCurrent);
-    final maxLen = l.length > c.length ? l.length : c.length;
-    for (int i = 0; i < maxLen; i++) {
-      final lNum = i < l.length ? l[i] : 0;
-      final cNum = i < c.length ? c[i] : 0;
-      if (lNum > cNum) return true;
-      if (lNum < cNum) return false;
-    }
-    if (latest.contains('+') && current.contains('+')) {
-      final bLatest = int.tryParse(latest.split('+')[1]) ?? 0;
-      final bCurrent = int.tryParse(current.split('+')[1]) ?? 0;
-      if (bLatest > bCurrent) return true;
-    }
-  } catch (_) {}
-  return false;
+Future<void> _installAndroidUpdate(File file) async {
+  const platform = MethodChannel('com.example.client/permissions');
+  final accepted = await platform.invokeMethod<bool>('installApk', {'filePath': file.path});
+  if (accepted != true) throw StateError('Android installer did not open');
 }
-
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
   try {
     PackageInfo packageInfo = await PackageInfo.fromPlatform();
-    globalAppVersion = packageInfo.version;
+    globalAppVersion = int.tryParse(packageInfo.buildNumber) == null
+        ? packageInfo.version
+        : '${packageInfo.version}+${packageInfo.buildNumber}';
   } catch (e) {
     debugPrint('Error getting package info: $e');
   }
@@ -360,14 +344,15 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
 
     // Always fetch the latest server URL from GitHub Gist
     await _fetchServerUrlFromGist();
+    if (!mounted) return;
 
     setState(() {
       _isLoading = false;
     });
+    _checkAppUpdates();
   }
 
   Future<void> _fetchServerUrlFromGist() async {
-    bool updateChecked = false;
     final gistRawUrl =
         'https://gist.githubusercontent.com/stepa1235/0811a2ec6e74b06965de32f61643da5b/raw/ravestreamer.json?t=${DateTime.now().millisecondsSinceEpoch}';
     try {
@@ -389,7 +374,7 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
             if (hRes.statusCode == 200) isAlive = true;
           } catch (_) {}
 
-          if (isAlive) {
+          if (isAlive && mounted) {
             debugPrint('Fetched server URL from Gist: $freshUrl');
             setState(() {
               _savedServerUrl = freshUrl;
@@ -402,10 +387,6 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
               'serverUrl': freshUrl,
             });
           }
-          if (jsonData.containsKey('latest_version')) {
-            _checkForUpdates(jsonData);
-            updateChecked = true;
-          }
         }
       }
     } catch (e) {
@@ -414,6 +395,7 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
 
     // Fallback to saved URL from settings
     final data = await loadSettings();
+    if (!mounted) return;
     if (data.containsKey('serverUrl') && _savedServerUrl.isEmpty) {
       final savedUrl = (data['serverUrl'] as String).trim();
       if (!savedUrl.contains('localhost') && !savedUrl.contains('127.0.0.1') && !savedUrl.contains('loca.lt') && !savedUrl.contains('onrender.com')) {
@@ -429,284 +411,23 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
       });
     }
 
-    final targetServerUrl = _savedServerUrl.isNotEmpty 
-        ? _savedServerUrl 
-        : 'http://luna.lumigrid.ru:3000';
-
-    if (!updateChecked) {
-      _fetchVersionFromServer(targetServerUrl);
-    }
   }
 
-  Future<void> _fetchVersionFromServer(String dummy, {bool verbose = false}) async {
-    try {
-      final gistRawUrl = 'https://gist.githubusercontent.com/stepa1235/0811a2ec6e74b06965de32f61643da5b/raw/ravestreamer.json?t=${DateTime.now().millisecondsSinceEpoch}';
-      var res = await http.get(Uri.parse('https://api.github.com/gists/0811a2ec6e74b06965de32f61643da5b'), headers: {'Cache-Control': 'no-cache'}).timeout(const Duration(seconds: 4));
-        if (res.statusCode == 200) {
-          final jsonApi = jsonDecode(res.body) as Map<String, dynamic>;
-          res = http.Response(jsonApi['files']['ravestreamer.json']['content'], 200);
-        } else {
-          res = await http.get(Uri.parse(gistRawUrl)).timeout(const Duration(seconds: 4));
-        }
-
-      if (res.statusCode == 200) {
-        final jsonData = jsonDecode(res.body) as Map<String, dynamic>;
-        _checkForUpdates(jsonData, verbose: verbose);
-        return;
+  void _checkAppUpdates() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final updateContext = _navigatorKey.currentContext;
+      if (mounted && updateContext != null && Platform.isAndroid) {
+        unawaited(checkLunaUpdate(
+          updateContext,
+          currentVersion: globalAppVersion,
+          locale: _locale,
+          platform: UpdatePlatform.android,
+          install: _installAndroidUpdate,
+          temporaryDirectory: getTemporaryDirectory,
+        ));
       }
-    } catch (e) {
-      debugPrint('Could not fetch version from Gist: $e');
-    }
-    if (verbose && mounted) {
-      /* SnackBar disabled */
-    }
+    });
   }
-
-  void _checkForUpdates(Map<String, dynamic> jsonData, {bool verbose = false}) {
-    if (!jsonData.containsKey('latest_version')) return;
-    final latestVersion = jsonData['latest_version'] as String;
-    final String currentVersion = globalAppVersion;
-
-    if (isNewerVersion(latestVersion, currentVersion)) {
-      String downloadUrl = '';
-      if (Platform.isAndroid) {
-        downloadUrl = jsonData['android_url'] as String? ?? '';
-      } else if (Platform.isWindows) {
-        downloadUrl = jsonData['windows_url'] as String? ?? '';
-      }
-
-      if (downloadUrl.isEmpty) return;
-
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          _showUpdateDialog(latestVersion, downloadUrl);
-        }
-      });
-    } else if (verbose && mounted) {
-      /* SnackBar disabled */
-    }
-  }
-
-  void _showUpdateDialog(String version, String downloadUrl) {
-    final activeTheme = _themes[_themeName] ?? _themes['Dark']!;
-    final dialogParentContext = _navigatorKey.currentContext ?? context;
-    
-    showDialog(
-      context: dialogParentContext,
-      barrierDismissible: false,
-      builder: (BuildContext dialogContext) {
-        return AlertDialog(
-          backgroundColor: activeTheme.cardColor,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16.0),
-            side: BorderSide(color: activeTheme.primary.withOpacity(0.3), width: 1),
-          ),
-          title: Text(
-            _locale == 'ru' ? 'Доступно обновление v$version! 🚀' : 'Update Available v$version! 🚀',
-            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                _locale == 'ru'
-                    ? 'Вышла новая версия Luna v$version.\nНажмите «Авто-установка» для скачивания внутри приложения!'
-                    : 'A new version of Luna v$version is available.\nTap "Auto-Install" for direct in-app download!',
-                style: const TextStyle(color: Colors.white70, fontSize: 13),
-              ),
-              const SizedBox(height: 12),
-              SelectableText(
-                downloadUrl,
-                style: const TextStyle(color: Color(0xFF00F2FE), fontSize: 11, decoration: TextDecoration.underline),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: Text(
-                _locale == 'ru' ? 'Позже' : 'Later',
-                style: const TextStyle(color: Colors.white54),
-              ),
-            ),
-            ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: activeTheme.primary,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8.0),
-                ),
-              ),
-              icon: const Icon(Icons.downloading, size: 16),
-              onPressed: () {
-                Navigator.of(dialogContext).pop();
-                Future.delayed(const Duration(milliseconds: 100), () {
-                  _downloadAndInstallUpdate(downloadUrl, version, dialogParentContext);
-                });
-              },
-              label: Text(
-                _locale == 'ru' ? 'Авто-установка v$version' : 'Auto-Install v$version',
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Future<void> _downloadAndInstallUpdate(String downloadUrl, String version, [BuildContext? parentContext]) async {
-    BuildContext targetContext = _navigatorKey.currentContext ?? parentContext ?? context;
-    if (!targetContext.mounted) {
-      targetContext = parentContext ?? context;
-    }
-
-    double progress = 0.0;
-    StateSetter? dialogSetState;
-    bool isDownloading = true;
-    String statusText = _locale == 'ru' ? 'Подключение к серверу...' : 'Connecting to server...';
-    BuildContext? progressDialogContext;
-
-    showDialog(
-      context: targetContext,
-      barrierDismissible: false,
-      builder: (dialogCtx) {
-        progressDialogContext = dialogCtx;
-        return StatefulBuilder(
-          builder: (context, setState) {
-            dialogSetState = setState;
-            return AlertDialog(
-              backgroundColor: const Color(0xFF161426),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-                side: const BorderSide(color: Color(0xFF00F2FE), width: 1),
-              ),
-              title: Row(
-                children: [
-                  if (isDownloading)
-                    const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF00F2FE)))
-                  else
-                    const Icon(Icons.check_circle, color: Colors.green),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      _locale == 'ru' ? 'Автообновление v$version' : 'Auto-Updating v$version',
-                      style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                ],
-              ),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(statusText, style: const TextStyle(color: Colors.white70, fontSize: 13)),
-                  const SizedBox(height: 12),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(4),
-                    child: LinearProgressIndicator(
-                      value: progress > 0 ? progress : null,
-                      backgroundColor: Colors.white12,
-                      color: const Color(0xFF00F2FE),
-                      minHeight: 8,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: Text(
-                      '${(progress * 100).toStringAsFixed(1)}%',
-                      style: const TextStyle(color: Color(0xFF00F2FE), fontSize: 13, fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
-    );
-
-    try {
-      final req = http.Request('GET', Uri.parse(downloadUrl));
-      final res = await http.Client().send(req);
-      final total = res.contentLength ?? 0;
-      int received = 0;
-
-      Directory? saveDir;
-      try {
-        saveDir = await getExternalStorageDirectory();
-      } catch (_) {}
-      saveDir ??= await getTemporaryDirectory();
-
-      final apkPath = '${saveDir.path}/RaveStreamer_v$version.apk';
-      final apkFile = File(apkPath);
-      if (await apkFile.exists()) await apkFile.delete();
-
-      final sink = apkFile.openWrite();
-
-      await res.stream.forEach((chunk) {
-        received += chunk.length;
-        sink.add(chunk);
-        if (total > 0 && dialogSetState != null) {
-          dialogSetState!(() {
-            progress = received / total;
-            final mbReceived = (received / (1024 * 1024)).toStringAsFixed(1);
-            final mbTotal = (total / (1024 * 1024)).toStringAsFixed(1);
-            statusText = _locale == 'ru'
-                ? 'Загрузка: $mbReceived MB / $mbTotal MB'
-                : 'Downloading: $mbReceived MB / $mbTotal MB';
-          });
-        }
-      });
-
-      await sink.close();
-
-      if (dialogSetState != null) {
-        dialogSetState!(() {
-          isDownloading = false;
-          statusText = _locale == 'ru' ? 'Скачано! Запуск установки...' : 'Downloaded! Launching installer...';
-        });
-      }
-
-      await Future.delayed(const Duration(milliseconds: 500));
-      if (progressDialogContext != null && progressDialogContext!.mounted) {
-        Navigator.of(progressDialogContext!).pop();
-      }
-
-      // Launch native Android FileProvider package installer
-      bool installed = false;
-      try {
-        const platform = MethodChannel('com.example.client/permissions');
-        await platform.invokeMethod('requestInstallPermission');
-        final res = await platform.invokeMethod('installApk', {'filePath': apkPath});
-        installed = res == true;
-      } catch (e) {
-        debugPrint('Native installApk error: $e');
-      }
-
-      if (!installed) {
-        try {
-          final result = await OpenFilex.open(apkPath, type: "application/vnd.android.package-archive");
-          if (result.type == ResultType.done) installed = true;
-        } catch (_) {}
-      }
-
-      if (!installed) {
-        await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
-      }
-    } catch (e) {
-      debugPrint('Auto-download error: $e');
-      if (progressDialogContext != null && progressDialogContext!.mounted) {
-        Navigator.of(progressDialogContext!).pop();
-      }
-      try {
-        await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
-      } catch (_) {}
-    }
-  }
-
 
   Future<void> _saveAllSettings() async {
     await saveSettings({
@@ -850,7 +571,6 @@ class _ConnectionPageState extends State<ConnectionPage> {
   @override
   void initState() {
     super.initState();
-    _requestInstallPermissionOnStartup();
     final initialUrl = widget.initialServerUrl.isNotEmpty && 
         !widget.initialServerUrl.contains('loca.lt') && 
         !widget.initialServerUrl.contains('onrender.com') &&
@@ -864,17 +584,6 @@ class _ConnectionPageState extends State<ConnectionPage> {
     _usernameController = TextEditingController(
       text: widget.initialUsername.isNotEmpty ? widget.initialUsername : 'User_${(1000 + (DateTime.now().millisecond % 9000))}',
     );
-  }
-
-  Future<void> _requestInstallPermissionOnStartup() async {
-    if (Platform.isAndroid) {
-      try {
-        const platform = MethodChannel('com.example.client/permissions');
-        await platform.invokeMethod('requestInstallPermission');
-      } catch (e) {
-        debugPrint('Install permission request error: $e');
-      }
-    }
   }
 
   @override
@@ -1099,335 +808,15 @@ class _ConnectionPageState extends State<ConnectionPage> {
     if (saved == true) {
       widget.onPreferencesSaved(locale, theme, fontSize);
     } else if (saved == false) {
-      await _fetchVersionFromServer(_serverController.text.trim(), verbose: true);
-    }
-  }
-
-  Future<void> _fetchVersionFromServer(String dummy, {bool verbose = false}) async {
-    try {
-      final releaseRes = await http.get(
-        Uri.parse('https://api.github.com/repos/stepa1235/RaveStreamerClient/releases/latest'),
-        headers: {
-          'User-Agent': 'RaveStreamerApp/1.0',
-          'Accept': 'application/vnd.github.v3+json',
-          'Cache-Control': 'no-cache',
-        },
-      ).timeout(const Duration(seconds: 5));
-
-      if (releaseRes.statusCode == 200) {
-        final releaseData = jsonDecode(releaseRes.body) as Map<String, dynamic>;
-        final tagName = (releaseData['tag_name'] as String? ?? '').replaceAll('v', '');
-        final assets = (releaseData['assets'] as List<dynamic>? ?? []);
-        
-        String apkUrl = '';
-        String winUrl = '';
-        for (var asset in assets) {
-          final name = asset['name'] as String? ?? '';
-          final url = asset['browser_download_url'] as String? ?? '';
-          if (name.endsWith('.apk')) apkUrl = url;
-          if (name.endsWith('.zip')) winUrl = url;
-        }
-
-        if (tagName.isNotEmpty) {
-          final jsonData = {
-            'latest_version': tagName,
-            'android_url': apkUrl.isNotEmpty ? apkUrl : 'https://github.com/stepa1235/RaveStreamerClient/releases/latest/download/RaveStreamer.apk',
-            'windows_url': winUrl.isNotEmpty ? winUrl : 'https://github.com/stepa1235/RaveStreamerClient/releases/latest/download/RaveStreamer-Windows.zip',
-          };
-          _checkForUpdates(jsonData, verbose: verbose);
-          return;
-        }
-      }
-    } catch (e) {
-      debugPrint('GitHub Releases API check error: $e');
-    }
-
-    try {
-      final gistRes = await http.get(
-        Uri.parse('https://api.github.com/gists/0811a2ec6e74b06965de32f61643da5b'),
-        headers: {
-          'User-Agent': 'RaveStreamerApp/1.0',
-          'Cache-Control': 'no-cache',
-        },
-      ).timeout(const Duration(seconds: 5));
-
-      if (gistRes.statusCode == 200) {
-        final jsonApi = jsonDecode(gistRes.body) as Map<String, dynamic>;
-        final content = jsonApi['files']?['ravestreamer.json']?['content'] as String?;
-        if (content != null) {
-          final jsonData = jsonDecode(content) as Map<String, dynamic>;
-          _checkForUpdates(jsonData, verbose: verbose);
-          return;
-        }
-      }
-    } catch (e) {
-      debugPrint('Gist check error: $e');
-    }
-
-    if (verbose && mounted) {
-      /* SnackBar disabled */
-    }
-  }
-
-  bool _isNewerVersion(String latest, String current) {
-    try {
-      final cleanLatest = latest.split('+')[0];
-      final cleanCurrent = current.split('+')[0];
-      List<int> parse(String v) => v.split('.').map((e) => int.tryParse(e.replaceAll(RegExp(r'\D'), '')) ?? 0).toList();
-      final l = parse(cleanLatest);
-      final c = parse(cleanCurrent);
-      final maxLen = l.length > c.length ? l.length : c.length;
-      for (int i = 0; i < maxLen; i++) {
-        final lNum = i < l.length ? l[i] : 0;
-        final cNum = i < c.length ? c[i] : 0;
-        if (lNum > cNum) return true;
-        if (lNum < cNum) return false;
-      }
-    } catch (_) {}
-    return false;
-  }
-
-  void _checkForUpdates(Map<String, dynamic> jsonData, {bool verbose = false}) {
-    if (!jsonData.containsKey('latest_version')) return;
-    final latestVersion = jsonData['latest_version'] as String;
-    final String currentVersion = globalAppVersion;
-
-    if (_isNewerVersion(latestVersion, currentVersion)) {
-      String downloadUrl = '';
-      if (Platform.isAndroid) {
-        downloadUrl = jsonData['android_url'] as String? ?? '';
-      } else if (Platform.isWindows) {
-        downloadUrl = jsonData['windows_url'] as String? ?? '';
-      }
-
-      if (downloadUrl.isEmpty) return;
-
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          _showUpdateDialog(latestVersion, downloadUrl);
-        }
-      });
-    } else if (verbose && mounted) {
-      /* SnackBar disabled */
-    }
-  }
-
-  void _showUpdateDialog(String version, String downloadUrl) {
-    final activeTheme = _themes[widget.themeName] ?? _themes['Dark']!;
-    final dialogParentContext = context;
-    showDialog(
-      context: dialogParentContext,
-      barrierDismissible: false,
-      builder: (BuildContext dialogContext) {
-        return AlertDialog(
-          backgroundColor: activeTheme.cardColor,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16.0),
-            side: BorderSide(color: activeTheme.primary.withOpacity(0.3), width: 1),
-          ),
-          title: Text(
-            widget.locale == 'ru' ? 'Доступно обновление v$version! 🚀' : 'Update Available v$version! 🚀',
-            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                widget.locale == 'ru'
-                    ? 'Вышла новая версия Luna v$version.\nНажмите «Авто-установка» для скачивания внутри приложения!'
-                    : 'A new version of Luna v$version is available.\nTap "Auto-Install" for direct in-app download!',
-                style: const TextStyle(color: Colors.white70, fontSize: 13),
-              ),
-              const SizedBox(height: 12),
-              SelectableText(
-                downloadUrl,
-                style: const TextStyle(color: Color(0xFF00F2FE), fontSize: 11, decoration: TextDecoration.underline),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: Text(
-                widget.locale == 'ru' ? 'Позже' : 'Later',
-                style: const TextStyle(color: Colors.white54),
-              ),
-            ),
-            ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: activeTheme.primary,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8.0),
-                ),
-              ),
-              icon: const Icon(Icons.downloading, size: 16),
-              onPressed: () {
-                Navigator.of(dialogContext).pop();
-                Future.delayed(const Duration(milliseconds: 100), () {
-                  _downloadAndInstallUpdate(downloadUrl, version, dialogParentContext);
-                });
-              },
-              label: Text(
-                widget.locale == 'ru' ? 'Скачать v$version' : 'Download v$version',
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Future<void> _downloadAndInstallUpdate(String downloadUrl, String version, [BuildContext? parentContext]) async {
-    BuildContext targetContext = parentContext ?? context;
-    if (!targetContext.mounted) {
-      targetContext = context;
-    }
-
-    double progress = 0.0;
-    StateSetter? dialogSetState;
-    bool isDownloading = true;
-    String statusText = widget.locale == 'ru' ? 'Подключение к серверу...' : 'Connecting to server...';
-    BuildContext? progressDialogContext;
-
-    showDialog(
-      context: targetContext,
-      barrierDismissible: false,
-      builder: (dialogCtx) {
-        progressDialogContext = dialogCtx;
-        return StatefulBuilder(
-          builder: (context, setState) {
-            dialogSetState = setState;
-            return AlertDialog(
-              backgroundColor: const Color(0xFF161426),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-                side: const BorderSide(color: Color(0xFF00F2FE), width: 1),
-              ),
-              title: Row(
-                children: [
-                  if (isDownloading)
-                    const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF00F2FE)))
-                  else
-                    const Icon(Icons.check_circle, color: Colors.green),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      widget.locale == 'ru' ? 'Автообновление v$version' : 'Auto-Updating v$version',
-                      style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                ],
-              ),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(statusText, style: const TextStyle(color: Colors.white70, fontSize: 13)),
-                  const SizedBox(height: 12),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(4),
-                    child: LinearProgressIndicator(
-                      value: progress > 0 ? progress : null,
-                      backgroundColor: Colors.white12,
-                      color: const Color(0xFF00F2FE),
-                      minHeight: 8,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: Text(
-                      '${(progress * 100).toStringAsFixed(1)}%',
-                      style: const TextStyle(color: Color(0xFF00F2FE), fontSize: 13, fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
-    );
-
-    try {
-      final req = http.Request('GET', Uri.parse(downloadUrl));
-      final res = await http.Client().send(req);
-      final total = res.contentLength ?? 0;
-      int received = 0;
-
-      Directory? saveDir;
-      try {
-        saveDir = await getExternalStorageDirectory();
-      } catch (_) {}
-      saveDir ??= await getTemporaryDirectory();
-
-      final apkPath = '${saveDir.path}/RaveStreamer_v$version.apk';
-      final apkFile = File(apkPath);
-      if (await apkFile.exists()) await apkFile.delete();
-
-      final sink = apkFile.openWrite();
-
-      await res.stream.forEach((chunk) {
-        received += chunk.length;
-        sink.add(chunk);
-        if (total > 0 && dialogSetState != null) {
-          dialogSetState!(() {
-            progress = received / total;
-            final mbReceived = (received / (1024 * 1024)).toStringAsFixed(1);
-            final mbTotal = (total / (1024 * 1024)).toStringAsFixed(1);
-            statusText = widget.locale == 'ru'
-                ? 'Загрузка: $mbReceived MB / $mbTotal MB'
-                : 'Downloading: $mbReceived MB / $mbTotal MB';
-          });
-        }
-      });
-
-      await sink.close();
-
-      if (dialogSetState != null) {
-        dialogSetState!(() {
-          isDownloading = false;
-          statusText = widget.locale == 'ru' ? 'Скачано! Запуск установки...' : 'Downloaded! Launching installer...';
-        });
-      }
-
-      await Future.delayed(const Duration(milliseconds: 500));
-      if (progressDialogContext != null && progressDialogContext!.mounted) {
-        Navigator.of(progressDialogContext!).pop();
-      }
-
-      // Launch native Android FileProvider package installer
-      bool installed = false;
-      try {
-        const platform = MethodChannel('com.example.client/permissions');
-        await platform.invokeMethod('requestInstallPermission');
-        final res = await platform.invokeMethod('installApk', {'filePath': apkPath});
-        installed = res == true;
-      } catch (e) {
-        debugPrint('Native installApk error: $e');
-      }
-
-      if (!installed) {
-        try {
-          final result = await OpenFilex.open(apkPath, type: "application/vnd.android.package-archive");
-          if (result.type == ResultType.done) installed = true;
-        } catch (_) {}
-      }
-
-      if (!installed) {
-        await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
-      }
-    } catch (e) {
-      debugPrint('Auto-download error: $e');
-      if (progressDialogContext != null && progressDialogContext!.mounted) {
-        Navigator.of(progressDialogContext!).pop();
-      }
-      try {
-        await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
-      } catch (_) {}
+      await checkLunaUpdate(
+        this.context,
+        currentVersion: globalAppVersion,
+        locale: widget.locale,
+        platform: UpdatePlatform.android,
+        install: _installAndroidUpdate,
+        temporaryDirectory: getTemporaryDirectory,
+        manual: true,
+      );
     }
   }
 
@@ -5648,8 +5037,15 @@ class _RoomPageState extends State<RoomPage> {
                 ),
                 ElevatedButton(
                   onPressed: () {
-                    final targetUrl = widget.serverUrl.isNotEmpty ? widget.serverUrl : 'http://195.133.26.226:3000';
-                    _fetchVersionFromServer(targetUrl, verbose: true);
+                    checkLunaUpdate(
+                      context,
+                      currentVersion: globalAppVersion,
+                      locale: _locale,
+                      platform: UpdatePlatform.android,
+                      install: _installAndroidUpdate,
+                      temporaryDirectory: getTemporaryDirectory,
+                      manual: true,
+                    );
                   },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF00F2FE).withOpacity(0.2),
@@ -5671,281 +5067,6 @@ class _RoomPageState extends State<RoomPage> {
         ],
       ),
     );
-  }
-
-  Future<void> _fetchVersionFromServer(String dummy, {bool verbose = false}) async {
-    try {
-      final gistRawUrl = 'https://gist.githubusercontent.com/stepa1235/0811a2ec6e74b06965de32f61643da5b/raw/ravestreamer.json?t=${DateTime.now().millisecondsSinceEpoch}';
-      var res = await http.get(Uri.parse('https://api.github.com/gists/0811a2ec6e74b06965de32f61643da5b'), headers: {'Cache-Control': 'no-cache'}).timeout(const Duration(seconds: 4));
-        if (res.statusCode == 200) {
-          final jsonApi = jsonDecode(res.body) as Map<String, dynamic>;
-          res = http.Response(jsonApi['files']['ravestreamer.json']['content'], 200);
-        } else {
-          res = await http.get(Uri.parse(gistRawUrl)).timeout(const Duration(seconds: 4));
-        }
-
-      if (res.statusCode == 200) {
-        final jsonData = jsonDecode(res.body) as Map<String, dynamic>;
-        _checkForUpdates(jsonData, verbose: verbose);
-        return;
-      }
-    } catch (e) {
-      debugPrint('Could not fetch version from Gist: $e');
-    }
-    if (verbose && mounted) {
-      /* SnackBar disabled */
-    }
-  }
-
-  bool _isNewerVersion(String latest, String current) {
-    try {
-      final cleanLatest = latest.split('+')[0];
-      final cleanCurrent = current.split('+')[0];
-      List<int> parse(String v) => v.split('.').map((e) => int.tryParse(e.replaceAll(RegExp(r'\D'), '')) ?? 0).toList();
-      final l = parse(cleanLatest);
-      final c = parse(cleanCurrent);
-      final maxLen = l.length > c.length ? l.length : c.length;
-      for (int i = 0; i < maxLen; i++) {
-        final lNum = i < l.length ? l[i] : 0;
-        final cNum = i < c.length ? c[i] : 0;
-        if (lNum > cNum) return true;
-        if (lNum < cNum) return false;
-      }
-    } catch (_) {}
-    return false;
-  }
-
-  void _checkForUpdates(Map<String, dynamic> jsonData, {bool verbose = false}) {
-    if (!jsonData.containsKey('latest_version')) return;
-    final latestVersion = jsonData['latest_version'] as String;
-    final String currentVersion = globalAppVersion;
-
-    if (_isNewerVersion(latestVersion, currentVersion)) {
-      String downloadUrl = '';
-      if (Platform.isAndroid) {
-        downloadUrl = jsonData['android_url'] as String? ?? '';
-      } else if (Platform.isWindows) {
-        downloadUrl = jsonData['windows_url'] as String? ?? '';
-      }
-
-      if (downloadUrl.isEmpty) return;
-
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          _showUpdateDialog(latestVersion, downloadUrl);
-        }
-      });
-    } else if (verbose && mounted) {
-      /* SnackBar disabled */
-    }
-  }
-
-  void _showUpdateDialog(String version, String downloadUrl) {
-    final activeTheme = _themes[widget.themeName] ?? _themes['Dark']!;
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          backgroundColor: activeTheme.cardColor,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16.0),
-            side: BorderSide(color: activeTheme.primary.withOpacity(0.3), width: 1),
-          ),
-          title: Text(
-            _locale == 'ru' ? 'Доступно обновление v$version! 🚀' : 'Update Available v$version! 🚀',
-            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                _locale == 'ru'
-                    ? 'Вышла новая версия RaveStreamer v$version.\nНажмите «Авто-установка» для скачивания внутри приложения!'
-                    : 'A new version of RaveStreamer v$version is available.\nTap "Auto-Install" for direct in-app download!',
-                style: const TextStyle(color: Colors.white70, fontSize: 13),
-              ),
-              const SizedBox(height: 12),
-              SelectableText(
-                downloadUrl,
-                style: const TextStyle(color: Color(0xFF00F2FE), fontSize: 11, decoration: TextDecoration.underline),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: Text(
-                _locale == 'ru' ? 'Позже' : 'Later',
-                style: const TextStyle(color: Colors.white54),
-              ),
-            ),
-            ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: activeTheme.primary,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8.0),
-                ),
-              ),
-              icon: const Icon(Icons.downloading, size: 16),
-              onPressed: () {
-                  Navigator.of(context).pop();
-                  Future.delayed(const Duration(milliseconds: 300), () {
-                    _downloadAndInstallUpdate(downloadUrl, version);
-                  });
-                },
-              label: Text(
-                _locale == 'ru' ? 'Авто-установка v$version' : 'Auto-Install v$version',
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Future<void> _downloadAndInstallUpdate(String downloadUrl, String version) async {
-    double progress = 0.0;
-    StateSetter? dialogSetState;
-    bool isDownloading = true;
-    String statusText = _locale == 'ru' ? 'Подключение к серверу...' : 'Connecting to server...';
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogCtx) => StatefulBuilder(
-        builder: (context, setState) {
-          dialogSetState = setState;
-          return AlertDialog(
-            backgroundColor: const Color(0xFF161426),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-              side: const BorderSide(color: Color(0xFF00F2FE), width: 1),
-            ),
-            title: Row(
-              children: [
-                if (isDownloading)
-                  const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF00F2FE)))
-                else
-                  const Icon(Icons.check_circle, color: Colors.green),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    _locale == 'ru' ? 'Автообновление v$version' : 'Auto-Updating v$version',
-                    style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
-                  ),
-                ),
-              ],
-            ),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(statusText, style: const TextStyle(color: Colors.white70, fontSize: 13)),
-                const SizedBox(height: 12),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(4),
-                  child: LinearProgressIndicator(
-                    value: progress > 0 ? progress : null,
-                    backgroundColor: Colors.white12,
-                    color: const Color(0xFF00F2FE),
-                    minHeight: 8,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: Text(
-                    '${(progress * 100).toStringAsFixed(1)}%',
-                    style: const TextStyle(color: Color(0xFF00F2FE), fontSize: 13, fontWeight: FontWeight.bold),
-                  ),
-                ),
-              ],
-            ),
-          );
-        },
-      ),
-    );
-
-    try {
-      final req = http.Request('GET', Uri.parse(downloadUrl));
-      final res = await http.Client().send(req);
-      final total = res.contentLength ?? 0;
-      int received = 0;
-
-      Directory? saveDir;
-      try {
-        saveDir = await getExternalStorageDirectory();
-      } catch (_) {}
-      saveDir ??= await getTemporaryDirectory();
-
-      final apkPath = '${saveDir.path}/RaveStreamer_v$version.apk';
-      final apkFile = File(apkPath);
-      if (await apkFile.exists()) await apkFile.delete();
-
-      final sink = apkFile.openWrite();
-
-      await res.stream.forEach((chunk) {
-        received += chunk.length;
-        sink.add(chunk);
-        if (total > 0 && dialogSetState != null) {
-          dialogSetState!(() {
-            progress = received / total;
-            final mbReceived = (received / (1024 * 1024)).toStringAsFixed(1);
-            final mbTotal = (total / (1024 * 1024)).toStringAsFixed(1);
-            statusText = _locale == 'ru'
-                ? 'Загрузка: $mbReceived MB / $mbTotal MB'
-                : 'Downloading: $mbReceived MB / $mbTotal MB';
-          });
-        }
-      });
-
-      await sink.close();
-
-      if (dialogSetState != null) {
-        dialogSetState!(() {
-          isDownloading = false;
-          statusText = _locale == 'ru' ? 'Скачано! Запуск установки...' : 'Downloaded! Launching installer...';
-        });
-      }
-
-      await Future.delayed(const Duration(milliseconds: 500));
-      if (mounted) Navigator.of(context).pop();
-
-      // Launch native Android FileProvider package installer
-      bool installed = false;
-      try {
-        const platform = MethodChannel('com.example.client/permissions');
-        await platform.invokeMethod('requestInstallPermission');
-        final res = await platform.invokeMethod('installApk', {'filePath': apkPath});
-        installed = res == true;
-      } catch (e) {
-        debugPrint('Native installApk error: $e');
-      }
-
-      if (!installed) {
-        try {
-          final result = await OpenFilex.open(apkPath, type: "application/vnd.android.package-archive");
-          if (result.type == ResultType.done) installed = true;
-        } catch (_) {}
-      }
-
-      if (!installed) {
-        await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
-      }
-    } catch (e) {
-      debugPrint('Auto-download error: $e');
-      if (mounted) Navigator.of(context).pop();
-      if (mounted) {
-         /* SnackBar disabled */
-      }
-      try {
-        await launchUrl(Uri.parse(downloadUrl), mode: LaunchMode.externalApplication);
-      } catch (_) {}
-    }
   }
 
   void _showLogsDialog() {

@@ -1,9 +1,8 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
+import 'package:luna_updates/luna_updates.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:media_kit/media_kit.dart' show MediaKit;
 import 'package:webview_windows/webview_windows.dart';
@@ -22,7 +21,9 @@ void main() async {
 
   try {
     PackageInfo packageInfo = await PackageInfo.fromPlatform();
-    globalAppVersion = packageInfo.version;
+    globalAppVersion = int.tryParse(packageInfo.buildNumber) == null
+        ? packageInfo.version
+        : '${packageInfo.version}+${packageInfo.buildNumber}';
   } catch (e) {
     debugPrint('Error getting package info: $e');
   }
@@ -132,120 +133,19 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
     });
   }
 
-  Future<void> _checkAppUpdates() async {
-    try {
-      final releaseRes = await http.get(
-        Uri.parse('https://api.github.com/repos/stepa1235/RaveStreamerClient/releases/latest'),
-        headers: {
-          'User-Agent': 'LunaClient/1.0',
-          'Accept': 'application/vnd.github.v3+json',
-          'Cache-Control': 'no-cache',
-        },
-      ).timeout(const Duration(seconds: 5));
-
-      if (releaseRes.statusCode == 200) {
-        final releaseData = jsonDecode(releaseRes.body) as Map<String, dynamic>;
-        final tagName = (releaseData['tag_name'] as String? ?? '').replaceAll('v', '');
-        final assets = (releaseData['assets'] as List<dynamic>? ?? []);
-
-        String winUrl = '';
-        for (var asset in assets) {
-          final name = asset['name'] as String? ?? '';
-          final url = asset['browser_download_url'] as String? ?? '';
-          if (name.endsWith('.zip')) winUrl = url;
-        }
-
-        if (tagName.isNotEmpty) {
-          final jsonData = {
-            'latest_version': tagName,
-            'windows_url': winUrl.isNotEmpty
-                ? winUrl
-                : 'https://github.com/stepa1235/RaveStreamerClient/releases/latest/download/Luna-Windows.zip',
-          };
-          _checkForUpdates(jsonData);
-        }
+  void _checkAppUpdates() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final updateContext = _navigatorKey.currentContext;
+      if (mounted && updateContext != null && Platform.isWindows) {
+        unawaited(checkLunaUpdate(
+          updateContext,
+          currentVersion: globalAppVersion,
+          locale: _locale,
+          platform: UpdatePlatform.windows,
+          install: installWindowsUpdate,
+        ));
       }
-    } catch (e) {
-      debugPrint('GitHub Releases API update check error: $e');
-    }
-  }
-
-  void _checkForUpdates(Map<String, dynamic> jsonData) {
-    if (!jsonData.containsKey('latest_version')) return;
-    final latestVersion = jsonData['latest_version'] as String;
-    final String currentVersion = globalAppVersion;
-
-    if (isNewerVersion(latestVersion, currentVersion)) {
-      String downloadUrl = '';
-      if (Platform.isAndroid) {
-        downloadUrl = jsonData['android_url'] as String? ?? '';
-      } else if (Platform.isWindows) {
-        downloadUrl = jsonData['windows_url'] as String? ?? '';
-      }
-
-      if (downloadUrl.isEmpty) return;
-
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _showUpdateDialog(latestVersion, downloadUrl);
-      });
-    }
-  }
-
-  void _showUpdateDialog(String version, String downloadUrl) {
-    final activeTheme = appThemes[_themeName] ?? appThemes['Dark']!;
-    final context = _navigatorKey.currentContext;
-    if (context == null) return;
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          backgroundColor: activeTheme.cardColor,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16.0),
-            side: BorderSide(color: activeTheme.primary.withOpacity(0.3), width: 1),
-          ),
-          title: Text(
-            _locale == 'ru' ? 'Доступно обновление! 🚀' : 'Update Available! 🚀',
-            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-          ),
-          content: Text(
-            _locale == 'ru'
-                ? 'Доступна новая версия Luna v$version (текущая v$globalAppVersion).\nХотите обновиться?'
-                : 'A new version of Luna v$version is available (current v$globalAppVersion).\nDo you want to update?',
-            style: const TextStyle(color: Colors.white70),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: Text(
-                _locale == 'ru' ? 'Позже' : 'Later',
-                style: const TextStyle(color: Colors.white54),
-              ),
-            ),
-            ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: activeTheme.primary,
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8.0),
-                ),
-              ),
-              icon: const Icon(Icons.downloading, size: 16),
-              onPressed: () {
-                Navigator.of(context).pop();
-                downloadAndInstallUpdateWindows(context, downloadUrl, version, locale: _locale);
-              },
-              label: Text(
-                _locale == 'ru' ? 'Авто-Обновление v$version' : 'Auto-Install v$version',
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-          ],
-        );
-      },
-    );
+    });
   }
 
   Future<void> _saveAllSettings() async {

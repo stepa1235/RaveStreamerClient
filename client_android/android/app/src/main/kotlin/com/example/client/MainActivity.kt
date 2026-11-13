@@ -16,30 +16,23 @@ class MainActivity : FlutterActivity() {
 
     override fun onResume() {
         super.onResume()
-        pendingApkPath?.let { path ->
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || packageManager.canRequestPackageInstalls()) {
-                val fileToInstall = pendingApkPath
-                pendingApkPath = null
-                try {
-                    val file = File(fileToInstall!!)
-                    if (file.exists()) {
-                        val authority = "${context.packageName}.install_apk.fileprovider"
-                        val apkUri: Uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                            FileProvider.getUriForFile(context, authority, file)
-                        } else {
-                            Uri.fromFile(file)
-                        }
-                        val intent = Intent(Intent.ACTION_VIEW).apply {
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
-                            setDataAndType(apkUri, "application/vnd.android.package-archive")
-                        }
-                        startActivity(intent)
-                    }
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
+        val path = pendingApkPath ?: return
+        pendingApkPath = null
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || packageManager.canRequestPackageInstalls()) {
+            try {
+                openInstaller(File(path))
+            } catch (error: Exception) {
+                android.widget.Toast.makeText(this, "Luna: installer could not open", android.widget.Toast.LENGTH_LONG).show()
             }
         }
+    }
+
+    private fun openInstaller(file: File) {
+        val uri = FileProvider.getUriForFile(this, "$packageName.install_apk.fileprovider", file)
+        startActivity(Intent(Intent.ACTION_VIEW).apply {
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            setDataAndType(uri, "application/vnd.android.package-archive")
+        })
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -47,58 +40,22 @@ class MainActivity : FlutterActivity() {
         volumeControlStream = android.media.AudioManager.STREAM_MUSIC
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
-                "requestInstallPermission" -> {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        if (!packageManager.canRequestPackageInstalls()) {
-                            try {
-                                val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
-                                    data = Uri.parse("package:$packageName")
-                                }
-                                startActivity(intent)
-                                result.success(false)
-                                return@setMethodCallHandler
-                            } catch (e: Exception) {
-                                result.error("ERROR", e.message, null)
-                                return@setMethodCallHandler
-                            }
-                        }
-                    }
-                    result.success(true)
-                }
                 "installApk" -> {
-                    val filePath = call.argument<String>("filePath")
-                    if (filePath == null) {
-                        result.error("INVALID_PATH", "File path is null", null)
-                        return@setMethodCallHandler
-                    }
-                    pendingApkPath = filePath
                     try {
-                        val file = File(filePath)
-                        if (!file.exists()) {
-                            result.error("FILE_NOT_FOUND", "APK file does not exist", null)
-                            return@setMethodCallHandler
-                        }
-                        
-                        val intent = Intent(Intent.ACTION_VIEW).apply {
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION
-                        }
-                        
-                        val authority = "${context.packageName}.install_apk.fileprovider"
-                        val apkUri: Uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                            try {
-                                FileProvider.getUriForFile(context, authority, file)
-                            } catch (e: Exception) {
-                                Uri.fromFile(file)
-                            }
+                        val file = File(requireNotNull(call.argument<String>("filePath"))).canonicalFile
+                        require(file.isFile && file.name == "Luna.apk" &&
+                            file.parentFile?.name?.startsWith("luna-update-") == true &&
+                            file.parentFile?.parentFile == cacheDir.canonicalFile)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !packageManager.canRequestPackageInstalls()) {
+                            pendingApkPath = file.path
+                            startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
                         } else {
-                            Uri.fromFile(file)
+                            openInstaller(file)
                         }
-                        
-                        intent.setDataAndType(apkUri, "application/vnd.android.package-archive")
-                        startActivity(intent)
                         result.success(true)
-                    } catch (e: Exception) {
-                        result.error("INSTALL_ERROR", e.message, null)
+                    } catch (error: Exception) {
+                        pendingApkPath = null
+                        result.error("INSTALL_ERROR", "Could not open Luna installer", null)
                     }
                 }
                 "setMediaAudioMode" -> {
