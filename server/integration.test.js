@@ -74,3 +74,85 @@ test('real sockets join, preserve host identity and reject cross-room injection'
   outsider.emit('join-room', null);
   assert.equal((await fetch(base + '/health')).status, 200);
 });
+
+function nextEvent(socket, event, predicate = () => true) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      socket.off(event, handler);
+      reject(new Error(`No matching ${event} event`));
+    }, 7000);
+    function handler(value) {
+      if (!predicate(value)) return;
+      clearTimeout(timer);
+      socket.off(event, handler);
+      resolve(value);
+    }
+    socket.on(event, handler);
+  });
+}
+
+test('room collaboration preserves a private session and enforces roles', { timeout: 20000 }, async () => {
+  const roomId = 'watch-together';
+  const host = await connect(), viewer = await connect(), outsider = await connect();
+  await join(host, roomId, 'Host', { password: 'private' });
+  const denied = nextEvent(outsider, 'room-error');
+  outsider.emit('join-room', { roomId, username: 'Guest', inviteToken: 'invalid' });
+  assert.equal((await denied).type, 'INVITE_EXPIRED');
+
+  const { token } = await host.timeout(3000).emitWithAck('room-invite', { roomId, minutes: 15 });
+  const session = nextEvent(viewer, 'room-resume-token');
+  await join(viewer, roomId, 'Viewer', { inviteToken: token });
+  const resumeToken = (await session).token;
+  const [ping] = await Promise.all([
+    viewer.timeout(3000).emitWithAck('room-ping', { roomId }),
+    assert.rejects(viewer.timeout(100).emitWithAck('room-invite', { roomId, minutes: 15 })),
+  ]);
+  assert.deepEqual(ping, { ok: true });
+
+  const cohost = nextEvent(viewer, 'room-features', state => state.viewers.some(u => u.cohost));
+  host.emit('room-cohost', { roomId, targetId: viewer.id, enabled: true });
+  await cohost;
+  const media = nextEvent(viewer, 'room-features', state => !!state.mediaId);
+  viewer.emit('video-change', { roomId, videoUrl: 'https://example.test/movie.mp4', videoName: 'Movie' });
+  const { mediaId } = await media;
+  const bookmark = nextEvent(host, 'chat-msg', msg => !!msg.bookmark);
+  viewer.emit('chat-msg', { roomId, bookmark: { mediaId, seconds: 23 } });
+  assert.deepEqual((await bookmark).bookmark, { mediaId, seconds: 23 });
+
+  const suggestion = nextEvent(host, 'room-features', state => state.proposals.length === 1);
+  assert.deepEqual(await viewer.timeout(3000).emitWithAck('room-propose', {
+    roomId, url: 'https://example.test/next.mp4', title: 'Next',
+  }), { ok: true });
+  const [{ id }] = (await suggestion).proposals;
+  const voted = nextEvent(host, 'room-features', state => state.proposals[0]?.votes === 1);
+  viewer.emit('room-vote', { roomId, id });
+  await voted;
+
+  const autoPauseEnabled = nextEvent(viewer, 'room-features', state => state.autoPause);
+  host.emit('room-auto-pause', { roomId, enabled: true });
+  await autoPauseEnabled;
+  const playing = nextEvent(viewer, 'played');
+  host.emit('play', { roomId, time: 40 });
+  await playing;
+  const paused = nextEvent(host, 'paused');
+  viewer.emit('room-readiness', { roomId, mediaId, readiness: 'buffering' });
+  assert.ok((await paused).time >= 40);
+  const resumed = nextEvent(host, 'played');
+  viewer.emit('room-readiness', { roomId, mediaId, readiness: 'ready' });
+  await resumed;
+
+  // Replace the old connection before the server observes its transport closing.
+  const replacement = await connect();
+  const restored = nextEvent(replacement, 'room-features', state => state.viewers.some(u => u.id === replacement.id));
+  const roomState = await join(replacement, roomId, 'Viewer', { resumeToken });
+  assert.equal(roomState.isHost, false);
+  assert.equal(roomState.videoName, 'Movie');
+  assert.ok(roomState.calculatedTime >= 40);
+  assert.equal((await restored).viewers.find(u => u.id === replacement.id).cohost, true);
+  const unvoted = nextEvent(host, 'room-features', state => state.proposals[0]?.votes === 0);
+  replacement.emit('room-vote', { roomId, id });
+  await unvoted;
+  const queued = nextEvent(host, 'queue-updated');
+  replacement.emit('room-review', { roomId, id, accept: true });
+  assert.deepEqual((await queued).queue, [{ videoUrl: 'https://example.test/next.mp4', videoName: 'Next' }]);
+});

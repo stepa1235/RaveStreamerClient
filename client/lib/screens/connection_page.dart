@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:luna_updates/luna_updates.dart';
+import 'package:luna_room/luna_room.dart';
 import '../core/constants/localization.dart';
 import '../core/theme/app_theme.dart';
 import '../core/services/update_service.dart';
@@ -18,6 +19,7 @@ class ConnectionPage extends StatefulWidget {
   final double chatFontSize;
   final ValueChanged<double> onChatFontSizeChange;
   final String clientId;
+  final String? incomingInvite;
   final void Function(String, String, double) onPreferencesSaved;
 
   const ConnectionPage({
@@ -32,6 +34,7 @@ class ConnectionPage extends StatefulWidget {
     required this.chatFontSize,
     required this.onChatFontSizeChange,
     required this.clientId,
+    this.incomingInvite,
     required this.onPreferencesSaved,
   });
 
@@ -62,6 +65,9 @@ class _ConnectionPageState extends State<ConnectionPage> {
     _serverController = TextEditingController(
       text: initialUrl,
     );
+    if (widget.incomingInvite case final String invite) {
+      _roomController.text = invite;
+    }
     _usernameController = TextEditingController(
       text: widget.initialUsername.isNotEmpty ? widget.initialUsername : 'User_${(1000 + (DateTime.now().millisecond % 9000))}',
     );
@@ -82,7 +88,15 @@ class _ConnectionPageState extends State<ConnectionPage> {
 
   Future<void> _connectAndJoin() async {
     final username = _usernameController.text.trim();
-    final roomId = _roomController.text.trim();
+    final roomInput = _roomController.text.trim();
+    final invite = RoomInvite.parse(roomInput, _serverController.text.trim());
+    final roomId = invite?.roomId ?? roomInput;
+    if (roomId.isNotEmpty && !RegExp(r'^[a-zA-Z0-9_-]{1,128}$').hasMatch(roomId)) {
+      setState(() => _errorMessage = widget.locale == 'ru'
+          ? 'Введите название комнаты или ссылку-приглашение для этого сервера.'
+          : 'Enter a room ID or an invitation for this server.');
+      return;
+    }
 
     if (username.isEmpty || roomId.isEmpty) {
       setState(() {
@@ -134,6 +148,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
           serverUrl: serverUrl,
           username: username,
           roomId: roomId,
+          inviteToken: invite?.token,
           password: _isPrivateRoom ? _passwordController.text.trim() : null,
           locale: widget.locale,
           onLocaleChange: widget.onLocaleChange,
@@ -425,10 +440,8 @@ class _ConnectionPageState extends State<ConnectionPage> {
                         controller: _roomController,
                         label: _loc('roomLabel'),
                         icon: Icons.vpn_key_outlined,
-                        hint: _loc('roomHint'),
-                        inputFormatters: [
-                          FilteringTextInputFormatter.allow(RegExp(r'[a-zA-Z0-9]')),
-                        ],
+                        hint: widget.locale == 'ru' ? 'Комната или ссылка-приглашение' : 'Room ID or invite link',
+                        inputFormatters: [LengthLimitingTextInputFormatter(512)],
                       ),
                       const SizedBox(height: 16),
 

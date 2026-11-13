@@ -15,7 +15,7 @@ import 'core/services/settings_service.dart';
 import 'core/services/update_service.dart';
 import 'screens/connection_page.dart';
 
-void main() async {
+void main(List<String> arguments) async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
 
@@ -47,11 +47,31 @@ void main() async {
     }
   }
 
-  runApp(const RaveStreamerApp());
+  final invite = arguments.where((value) => value.startsWith('luna://invite#')).firstOrNull;
+  if (Platform.isWindows) unawaited(_registerInviteProtocol());
+  runApp(RaveStreamerApp(invite: invite));
+}
+
+Future<void> _registerInviteProtocol() async {
+  const key = r'HKCU\Software\Classes\luna';
+  final systemRoot = Platform.environment['SystemRoot'] ?? r'C:\Windows';
+  final reg = '$systemRoot\\System32\\reg.exe';
+  try {
+    final command = await Process.run(reg, [
+      'add', '$key\\shell\\open\\command', '/ve', '/t', 'REG_SZ',
+      '/d', '"${Platform.resolvedExecutable}" "%1"', '/f',
+    ]);
+    if (command.exitCode == 0) {
+      await Process.run(reg, ['add', key, '/v', 'URL Protocol', '/t', 'REG_SZ', '/d', '', '/f']);
+    }
+  } on ProcessException {
+    // Pasting an invitation still works when the protocol cannot be registered.
+  }
 }
 
 class RaveStreamerApp extends StatefulWidget {
-  const RaveStreamerApp({super.key});
+  const RaveStreamerApp({super.key, this.invite});
+  final String? invite;
 
   @override
   State<RaveStreamerApp> createState() => _RaveStreamerAppState();
@@ -228,6 +248,7 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
         fontFamily: 'Roboto',
       ),
       home: ConnectionPage(
+        incomingInvite: widget.invite,
         locale: _locale,
         onLocaleChange: _setLocale,
         themeName: _themeName,

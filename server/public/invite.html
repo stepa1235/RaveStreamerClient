@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Приглашение в Luna</title>
+<style>
+  body { margin: 0; padding: 2rem; color: #f8f6ff; background: #161426; font: 1rem/1.55 system-ui; }
+  main { max-width: 30rem; margin: 10vh auto; }
+  a, button { display: inline-block; padding: .65rem 1rem; border: 0; border-radius: .65rem; font: inherit; }
+  a { color: white; background: #5641ae; text-decoration: none; }
+  button { margin: .5rem; cursor: pointer; }
+  input { box-sizing: border-box; width: 100%; padding: .65rem; }
+</style>
+<main>
+  <h1>Приглашение в Luna</h1>
+  <p id="status">Проверяем ссылку…</p>
+  <div id="actions" hidden>
+    <a id="open">Открыть Luna</a>
+    <button id="copy">Скопировать ссылку</button>
+    <p>Если приложение не открылось, вставьте ссылку в поле комнаты в Luna.</p>
+    <input id="link" aria-label="Ссылка на комнату" readonly>
+  </div>
+</main>
+<script>
+  const parameters = new URLSearchParams(location.hash.slice(1));
+  const room = parameters.get('room') || '';
+  const token = parameters.get('token') || '';
+  const status = document.getElementById('status');
+  if (/^[a-zA-Z0-9_-]{1,128}$/.test(room) && /^[a-f0-9]{48}$/.test(token)) {
+    status.textContent = 'Комната: ' + room;
+    const link = document.getElementById('link');
+    link.value = location.href;
+    const deepLink = new URLSearchParams({ server: location.origin, room, token });
+    document.getElementById('open').href = 'luna://invite#' + deepLink;
+    document.getElementById('actions').hidden = false;
+    document.getElementById('copy').onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(link.value);
+        status.textContent = 'Ссылка скопирована.';
+      } catch {
+        link.select();
+        status.textContent = 'Скопируйте выделенную ссылку.';
+      }
+    };
+  } else {
+    status.textContent = 'Ссылка повреждена. Попросите хоста создать новое приглашение.';
+  }
+</script>
+</html>

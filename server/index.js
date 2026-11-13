@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
+const net = require('node:net');
 
 const app = express();
 // Trust only explicitly configured proxy networks; direct clients cannot forge their IP.
@@ -126,6 +127,7 @@ app.post('/api/upload-chat-image', async (req, res) => {
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+app.get('/invite', (req, res) => res.sendFile(path.join(__dirname, 'public', 'invite.html')));
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 // Health check endpoint (public)
@@ -1593,6 +1595,73 @@ function getIceServers(socketId = null) {
   return servers;
 }
 
+function roomFeatures(room) {
+  return {
+    mediaId: room.mediaId || null,
+    autoPause: room.autoPause === true,
+    autoPaused: room.autoPaused === true,
+    viewers: room.users.filter(u => !u.isBroadcaster).map(u => ({
+      id: u.id, username: u.username, isHost: u.isHost, cohost: u.cohost === true,
+      readiness: u.readiness || 'unknown'
+    })),
+    proposals: (room.proposals || []).map(({ voters, ...proposal }) => ({
+      ...proposal, votes: voters.size
+    }))
+  };
+}
+
+function publishRoomFeatures(room) {
+  io.to(room.roomId).emit('room-features', roomFeatures(room));
+}
+
+function cancelBufferPause(room) {
+  clearTimeout(room.bufferTimer);
+  room.bufferTimer = null;
+  room.autoPaused = false;
+}
+
+function newRoomMedia(room) {
+  cancelBufferPause(room);
+  room.mediaId = room.videoUrl ? crypto.randomUUID() : null;
+  for (const user of room.users) user.readiness = 'unknown';
+  publishRoomFeatures(room);
+}
+
+function roomTime(room) {
+  return room.currentTime + (room.isPlaying ? Math.max(0, Date.now() - room.lastUpdated) / 1000 : 0);
+}
+
+function evaluateBufferPause(room) {
+  const waiting = room.users.some(u => !u.isBroadcaster && u.readiness === 'buffering');
+  if (!room.autoPause || room.isLiveStreaming || !room.videoUrl || !waiting) {
+    clearTimeout(room.bufferTimer);
+    room.bufferTimer = null;
+    if (room.autoPaused) {
+      room.autoPaused = false;
+      if (room.users.length && !room.isLiveStreaming && room.videoUrl) {
+        room.isPlaying = true;
+        room.lastUpdated = Date.now();
+        room.lastControl = Date.now();
+        io.to(room.roomId).emit('played', { time: room.currentTime });
+      }
+      publishRoomFeatures(room);
+    }
+    return;
+  }
+  if (!room.isPlaying || room.bufferTimer) return;
+  room.bufferTimer = setTimeout(() => {
+    room.bufferTimer = null;
+    if (rooms.get(room.roomId) !== room || !room.autoPause || !room.isPlaying || room.isLiveStreaming ||
+        !room.users.some(u => !u.isBroadcaster && u.readiness === 'buffering')) return;
+    room.currentTime = roomTime(room);
+    room.isPlaying = false;
+    room.autoPaused = true;
+    room.lastUpdated = Date.now();
+    io.to(room.roomId).emit('paused', { time: room.currentTime });
+    publishRoomFeatures(room);
+  }, 4000);
+}
+
 io.on('connection', (socket) => {
   if (validAdminToken(socket.handshake.auth?.adminToken)) socket.join('luna:admin');
   // Validate before destructuring event arguments; reject malformed and cross-room traffic.
@@ -1622,7 +1691,7 @@ io.on('connection', (socket) => {
       }
     }
     if (event === 'join-room') {
-      for (const key of ['username', 'password', 'clientId', 'hostToken', 'adminToken']) {
+      for (const key of ['username', 'password', 'clientId', 'hostToken', 'adminToken', 'inviteToken', 'resumeToken']) {
         if (data[key] != null && (typeof data[key] !== 'string' || data[key].length > 256)) return;
       }
       if (socket.rooms.has(data.roomId)) return;
@@ -1641,7 +1710,7 @@ io.on('connection', (socket) => {
   });
 
   // Join or create a room
-  socket.on('join-room', ({ roomId, username, password, isHost, isBroadcaster, clientId, hostToken, adminToken }) => {
+  socket.on('join-room', ({ roomId, username, password, isHost, isBroadcaster, clientId, hostToken, adminToken, inviteToken, resumeToken }) => {
     if (!roomId) return;
 
     let room = rooms.get(roomId);
@@ -1650,6 +1719,17 @@ io.on('connection', (socket) => {
     // Strip invisible/zero-width and spoofing characters
     const cleanUsername = rawUsername.replace(/[\u200B-\u200D\uFEFF]/g, '').trim() || `Guest_${socket.id.slice(0, 4)}`;
     const isAdminSocket = validAdminToken(adminToken);
+    const session = room?.sessions?.get(resumeToken);
+    const resumable = session && session.username === cleanUsername && session.expiresAt > Date.now();
+    const validInvite = (room?.invites?.get(inviteToken) || 0) > Date.now();
+    if (resumeToken && !resumable) {
+      socket.emit('room-error', { type: 'ROOM_EXPIRED', message: 'Сеанс комнаты закончился. Войдите в комнату заново.' });
+      return;
+    }
+    if (inviteToken && !validInvite && !resumable) {
+      socket.emit('room-error', { type: 'INVITE_EXPIRED', message: 'Приглашение недействительно или истекло.' });
+      return;
+    }
 
     // Check persistent hosts
     const savedHostEntry = persistentRoomHosts[roomId];
@@ -1706,7 +1786,8 @@ io.on('connection', (socket) => {
       rooms.set(roomId, room);
     } else {
       // Room exists in memory: verify password and bans
-      if (room.password && room.password !== password) {
+      const ownerReturning = hostToken && hostToken === room.hostToken;
+      if (room.password && room.password !== password && !resumable && !validInvite && !ownerReturning) {
         socket.emit('room-error', { type: 'WRONG_PASSWORD', message: 'Неверный пароль или комната приватная.' });
         return;
       }
@@ -1714,15 +1795,16 @@ io.on('connection', (socket) => {
       // Check if user is banned
       const clientIP = socket.handshake.address;
       const isLoopback = clientIP === '::1' || clientIP === '127.0.0.1' || clientIP.includes('localhost');
-      if (room.bannedUsernames.has(username) || (!isLoopback && room.bannedIPs.has(clientIP))) {
+      if (room.bannedUsernames.has(cleanUsername) || (!isLoopback && room.bannedIPs.has(clientIP))) {
         console.log(`Rejecting banned user ${username} (IP: ${clientIP}) from room ${roomId}`);
         socket.emit('join-error', 'You are banned from this room.');
         return;
       }
 
-      // If user reconnects with same socket/clientId, remove stale socket to avoid duplicate
-      if (clientId) {
-        room.users = room.users.filter(u => u.id !== socket.id);
+      if (resumable && session.socketId !== socket.id) {
+        const previous = io.sockets.sockets.get(session.socketId);
+        previous?.leave(roomId);
+        room.users = room.users.filter(u => u.id !== session.socketId);
       }
 
       // Check if username is already taken by another active user in this room (skip for broadcaster)
@@ -1791,6 +1873,20 @@ io.on('connection', (socket) => {
       isHost: isUserHost,
       isBroadcaster: isBroadcasterUser
     };
+    if (!isBroadcasterUser) {
+      room.sessions ||= new Map();
+      for (const [token, value] of room.sessions) {
+        if (value.expiresAt <= Date.now()) room.sessions.delete(token);
+      }
+      const token = resumable ? resumeToken : crypto.randomBytes(32).toString('hex');
+      user.memberId = resumable ? session.memberId : crypto.randomUUID();
+      user.cohost = resumable && session.cohost === true;
+      room.sessions.set(token, {
+        socketId: socket.id, memberId: user.memberId, username: cleanUsername,
+        cohost: user.cohost, expiresAt: Infinity
+      });
+      socket.emit('room-resume-token', { roomId, token });
+    }
     room.users.push(user);
     // Keep host at index 0 if present
     room.users.sort((a, b) => (b.isHost ? 1 : 0) - (a.isHost ? 1 : 0));
@@ -1831,6 +1927,8 @@ io.on('connection', (socket) => {
       isLiveStreaming: room.isLiveStreaming
     });
 
+    publishRoomFeatures(room);
+
     // Send ICE servers immediately to the joining client
     socket.emit('ice-servers', getIceServers(socket.id));
 
@@ -1845,11 +1943,116 @@ io.on('connection', (socket) => {
     return Boolean(user.isHost || user.isBroadcaster);
   }
 
+  function canControl(room) {
+    return isRoomHost(room, socket.id) || room.users.some(u => u.id === socket.id && u.cohost);
+  }
+
+  socket.on('room-ping', ({ roomId }, reply) => {
+    if (typeof reply === 'function') reply({ ok: true });
+  });
+
+  socket.on('room-readiness', ({ roomId, mediaId, readiness }) => {
+    const room = rooms.get(roomId);
+    if (!room.mediaId || mediaId !== room.mediaId ||
+        !['ready', 'loading', 'buffering', 'unknown'].includes(readiness)) return;
+    const user = room.users.find(u => u.id === socket.id);
+    if (user.isBroadcaster) return;
+    // A stalled viewer may report a paused video as loading after an automatic pause.
+    if (room.autoPaused && user.readiness === 'buffering' && readiness === 'loading') return;
+    if (user.readiness !== readiness) {
+      user.readiness = readiness;
+      publishRoomFeatures(room);
+    }
+    evaluateBufferPause(room);
+  });
+
+  socket.on('room-auto-pause', ({ roomId, enabled }) => {
+    const room = rooms.get(roomId);
+    if (!isRoomHost(room, socket.id) || typeof enabled !== 'boolean') return;
+    room.autoPause = enabled;
+    evaluateBufferPause(room);
+    publishRoomFeatures(room);
+  });
+
+  socket.on('room-cohost', ({ roomId, targetId, enabled }) => {
+    const room = rooms.get(roomId);
+    if (!isRoomHost(room, socket.id) || typeof enabled !== 'boolean') return;
+    const user = room.users.find(u => u.id === targetId && !u.isHost && !u.isBroadcaster);
+    if (!user) return;
+    user.cohost = enabled;
+    for (const session of room.sessions?.values() || []) {
+      if (session.socketId === targetId) session.cohost = enabled;
+    }
+    publishRoomFeatures(room);
+  });
+
+  socket.on('room-invite', ({ roomId, minutes }, reply) => {
+    const room = rooms.get(roomId);
+    if (typeof reply !== 'function' || !isRoomHost(room, socket.id) || ![15, 60, 1440].includes(minutes)) return;
+    room.invites ||= new Map();
+    for (const [token, expiresAt] of room.invites) {
+      if (expiresAt <= Date.now()) room.invites.delete(token);
+    }
+    if (room.invites.size >= 30) return reply({ error: 'invite-limit' });
+    const token = crypto.randomBytes(24).toString('hex');
+    room.invites.set(token, Date.now() + minutes * 60000);
+    reply({ token });
+  });
+
+  socket.on('room-propose', ({ roomId, url, title }, reply) => {
+    const room = rooms.get(roomId);
+    const fail = () => { if (typeof reply === 'function') reply({ ok: false }); };
+    if (typeof url !== 'string' || url.length > 2048 || typeof title !== 'string' || title.length > 120) return fail();
+    try {
+      const parsed = new URL(url);
+      if (!['https:', 'http:'].includes(parsed.protocol) || parsed.username || parsed.password) return fail();
+      const hostname = parsed.hostname.replace(/\.$/, '');
+      if (!hostname.includes('.') || hostname.endsWith('.localhost') ||
+          hostname.endsWith('.local') || net.isIP(hostname)) return fail();
+      url = parsed.href;
+    } catch { return fail(); }
+    room.proposals ||= [];
+    if (room.proposals.length >= 30 || room.proposals.some(p => p.videoUrl === url)) return fail();
+    const user = room.users.find(u => u.id === socket.id);
+    if (!user.memberId) return fail();
+    room.proposals.push({
+      id: crypto.randomUUID(), videoUrl: url, videoName: title.trim() || url,
+      author: user.username, voters: new Set()
+    });
+    publishRoomFeatures(room);
+    if (typeof reply === 'function') reply({ ok: true });
+  });
+
+  socket.on('room-vote', ({ roomId, id }) => {
+    const room = rooms.get(roomId);
+    const proposal = room.proposals?.find(p => p.id === id);
+    const memberId = room.users.find(u => u.id === socket.id)?.memberId;
+    if (!proposal || !memberId) return;
+    if (!proposal.voters.delete(memberId) && proposal.voters.size < 500) proposal.voters.add(memberId);
+    publishRoomFeatures(room);
+  });
+
+  socket.on('room-review', ({ roomId, id, accept }) => {
+    const room = rooms.get(roomId);
+    if (!canControl(room) || typeof accept !== 'boolean') return;
+    const index = room.proposals?.findIndex(p => p.id === id) ?? -1;
+    if (index < 0) return;
+    if (accept) {
+      room.queue ||= [];
+      if (room.queue.length >= 100) return;
+      const { videoUrl, videoName } = room.proposals[index];
+      room.queue.push({ videoUrl, videoName });
+      io.to(roomId).emit('queue-updated', { queue: room.queue });
+    }
+    room.proposals.splice(index, 1);
+    publishRoomFeatures(room);
+  });
+
   // Clear player event
   socket.on('clear-player', ({ roomId }) => {
     const room = rooms.get(roomId);
     if (!room) return;
-    if (!isRoomHost(room, socket.id)) {
+    if (!canControl(room)) {
       socket.emit('action-error', 'Только хост может очистить плеер.');
       return;
     }
@@ -1861,6 +2064,7 @@ io.on('connection', (socket) => {
     room.currentTime = 0;
     room.isLiveStreaming = false;
 
+    newRoomMedia(room);
     console.log(`Room ${roomId} player cleared by host ${socket.id}`);
     io.to(roomId).emit('video-changed', {
       videoUrl: '',
@@ -1874,7 +2078,7 @@ io.on('connection', (socket) => {
   const handleVideoChange = ({ roomId, videoUrl, videoName, headers }) => {
     const room = rooms.get(roomId);
     if (!room) return;
-    if (!isRoomHost(room, socket.id)) {
+    if (!canControl(room)) {
       console.log(`Blocked non-host ${socket.id} from changing video in room ${roomId}`);
       socket.emit('action-error', 'Только хост может изменять видео.');
       return;
@@ -1883,10 +2087,11 @@ io.on('connection', (socket) => {
     room.videoUrl = videoUrl;
     room.videoName = videoName || (videoUrl ? 'External Video' : 'No Video Loaded');
     room.headers = headers;
-    room.isPlaying = false;
+    room.isPlaying = Boolean(videoUrl);
     room.currentTime = 0;
     room.lastUpdated = Date.now();
 
+    newRoomMedia(room);
     console.log(`Room ${roomId} video changed by host to: ${videoName || videoUrl}`);
     io.to(roomId).emit('video-changed', {
       videoUrl: room.videoUrl,
@@ -1901,21 +2106,28 @@ io.on('connection', (socket) => {
   // Play event
   socket.on('play', ({ roomId, time }) => {
     const room = rooms.get(roomId);
-    if (!room || !isRoomHost(room, socket.id)) return;
+    if (!room || !canControl(room)) return;
 
+    cancelBufferPause(room);
+    room.lastControl = Date.now();
+    publishRoomFeatures(room);
     room.isPlaying = true;
     room.currentTime = time;
     room.lastUpdated = Date.now();
 
     console.log(`Room ${roomId} playback started at: ${time}s`);
     socket.to(roomId).emit('played', { time });
+    evaluateBufferPause(room);
   });
 
   // Pause event
   socket.on('pause', ({ roomId, time }) => {
     const room = rooms.get(roomId);
-    if (!room || !isRoomHost(room, socket.id)) return;
+    if (!room || !canControl(room)) return;
 
+    cancelBufferPause(room);
+    room.lastControl = Date.now();
+    publishRoomFeatures(room);
     room.isPlaying = false;
     room.currentTime = time;
     room.lastUpdated = Date.now();
@@ -1927,11 +2139,12 @@ io.on('connection', (socket) => {
   // Seek event
   socket.on('seek', ({ roomId, time }) => {
     const room = rooms.get(roomId);
-    if (!room || !isRoomHost(room, socket.id)) return;
+    if (!room || !canControl(room)) return;
 
     room.currentTime = time;
     room.lastUpdated = Date.now();
 
+    room.lastControl = Date.now();
     console.log(`Room ${roomId} seeked to: ${time}s`);
     socket.to(roomId).emit('seeked', { time });
   });
@@ -1941,23 +2154,26 @@ io.on('connection', (socket) => {
     const room = rooms.get(roomId);
     if (!room || !room.users || room.users.length === 0) return;
 
-    // Only accept sync from the host
-    if (!isRoomHost(room, socket.id)) return;
+    // Ignore stale player ticks immediately after an explicit room command.
+    if (!isRoomHost(room, socket.id) || room.autoPaused || Date.now() - (room.lastControl || 0) < 3500) return;
 
     room.isPlaying = isPlaying;
     room.currentTime = currentTime;
     room.lastUpdated = Date.now();
 
     // Broadcast state to other users silently
-    socket.to(roomId).emit('state-synced', {
+    const state = {
       isPlaying: room.isPlaying,
       currentTime: room.currentTime
-    });
+    };
+    socket.to(roomId).emit('state-synced', state);
+    socket.to(roomId).emit('sync-state-broadcast', state);
+    evaluateBufferPause(room);
   });
 
   // Chat message event
-  socket.on('chat-msg', ({ roomId, username, text, clientId, replyTo, imageUrl }) => {
-    if (!roomId || (!text && !imageUrl)) return;
+  socket.on('chat-msg', ({ roomId, username, text, clientId, replyTo, imageUrl, bookmark }) => {
+    if (!roomId || (!text && !imageUrl && !bookmark)) return;
 
     const room = rooms.get(roomId);
     if (!room) return;
@@ -1965,11 +2181,16 @@ io.on('connection', (socket) => {
     if (!member || (text != null && (typeof text !== 'string' || text.length > 4000)) ||
         (imageUrl != null && (typeof imageUrl !== 'string' || imageUrl.length > 2048 || !/^https?:\/\//.test(imageUrl)))) return;
 
+    const marker = bookmark && room.mediaId && bookmark.mediaId === room.mediaId &&
+      !room.isLiveStreaming && Number.isFinite(bookmark.seconds) && bookmark.seconds >= 0 &&
+      bookmark.seconds <= 86400 ? { mediaId: room.mediaId, seconds: bookmark.seconds } : null;
+    if (!text && !imageUrl && !marker) return;
     const message = {
       id: Math.random().toString(36).substring(2, 9) + Date.now().toString(36),
       username: member.username,
       text: text || '',
       imageUrl: imageUrl || null,
+      bookmark: marker,
       replyTo: (replyTo && typeof replyTo === 'object') ? {
         id: replyTo.id || '',
         sender: replyTo.sender || replyTo.username || '',
@@ -2023,7 +2244,7 @@ io.on('connection', (socket) => {
   socket.on('add-to-queue', ({ roomId, videoUrl, videoName, headers }) => {
     const room = rooms.get(roomId);
     if (!room) return;
-    if (!isRoomHost(room, socket.id)) {
+    if (!canControl(room)) {
       socket.emit('action-error', 'Только хост может добавлять видео в очередь.');
       return;
     }
@@ -2039,7 +2260,7 @@ io.on('connection', (socket) => {
   // Remove video from queue
   socket.on('remove-from-queue', ({ roomId, index }) => {
     const room = rooms.get(roomId);
-    if (!room || !room.queue || !isRoomHost(room, socket.id)) return;
+    if (!room || !room.queue || !canControl(room)) return;
 
     if (index >= 0 && index < room.queue.length) {
       const removed = room.queue.splice(index, 1);
@@ -2051,7 +2272,7 @@ io.on('connection', (socket) => {
   // Skip to next video in queue
   socket.on('skip-video', ({ roomId }) => {
     const room = rooms.get(roomId);
-    if (!room || !room.queue || !isRoomHost(room, socket.id)) return;
+    if (!room || !room.queue || !canControl(room)) return;
 
     if (room.queue.length > 0) {
       const nextVideo = room.queue.shift();
@@ -2062,6 +2283,7 @@ io.on('connection', (socket) => {
       room.currentTime = 0;
       room.lastUpdated = Date.now();
 
+      newRoomMedia(room);
       console.log(`Skipped to next video in room ${roomId}: ${room.videoName}`);
       io.to(roomId).emit('video-changed', {
         videoUrl: room.videoUrl,
@@ -2076,6 +2298,7 @@ io.on('connection', (socket) => {
       room.currentTime = 0;
       room.lastUpdated = Date.now();
 
+      newRoomMedia(room);
       console.log(`Queue is empty, clearing player in room ${roomId}.`);
       io.to(roomId).emit('video-changed', {
         videoUrl: '',
@@ -2142,7 +2365,9 @@ io.on('connection', (socket) => {
       socket.emit('action-error', { message: 'Только хост комнаты может запускать стрим' });
       return;
     }
+    cancelBufferPause(room);
     room.isLiveStreaming = true;
+    publishRoomFeatures(room);
 
     let stream = activeLiveStreams.get(roomId);
     if (!stream) {
@@ -2221,7 +2446,7 @@ io.on('connection', (socket) => {
     }
 
     const targetSocket = io.sockets.sockets.get(targetSocketId);
-    if (targetSocket) {
+    if (targetSocket && room.users.some(u => u.id === targetSocketId && !u.isHost)) {
       const targetUser = room.users.find(u => u.id === targetSocketId);
       const kickedName = targetUser ? targetUser.username : 'User';
       console.log(`Kicking user ${targetSocketId} from room ${roomId}`);
@@ -2230,6 +2455,11 @@ io.on('connection', (socket) => {
 
       // Clean up target user from room users array
       room.users = room.users.filter(u => u.id !== targetSocketId);
+      for (const [token, session] of room.sessions || []) {
+        if (session.socketId === targetSocketId) room.sessions.delete(token);
+      }
+      evaluateBufferPause(room);
+      publishRoomFeatures(room);
       io.to(roomId).emit('room-users', room.users);
 
       const kickMessage = {
@@ -2255,7 +2485,7 @@ io.on('connection', (socket) => {
     }
 
     const targetSocket = io.sockets.sockets.get(targetSocketId);
-    if (targetSocket) {
+    if (targetSocket && room.users.some(u => u.id === targetSocketId && !u.isHost)) {
       const targetUser = room.users.find(u => u.id === targetSocketId);
       const bannedName = targetUser ? targetUser.username : 'User';
       if (targetUser) {
@@ -2274,6 +2504,11 @@ io.on('connection', (socket) => {
 
       // Clean up target user from room users array
       room.users = room.users.filter(u => u.id !== targetSocketId);
+      for (const [token, session] of room.sessions || []) {
+        if (session.socketId === targetSocketId) room.sessions.delete(token);
+      }
+      evaluateBufferPause(room);
+      publishRoomFeatures(room);
       io.to(roomId).emit('room-users', room.users);
 
       const banMessage = {
@@ -2298,10 +2533,15 @@ io.on('connection', (socket) => {
       const userIndex = room.users.findIndex(u => u.id === socket.id);
       if (userIndex !== -1) {
         const leavingUser = room.users[userIndex];
-        const wasHost = leavingUser.isHost || Boolean(room.hostUsername && leavingUser.username.toLowerCase() === room.hostUsername.toLowerCase());
+        const wasHost = leavingUser.isHost === true;
         const username = leavingUser.username;
         const isBroadcaster = Boolean(leavingUser.isBroadcaster || username.includes('(Broadcaster)'));
         room.users.splice(userIndex, 1);
+        for (const session of room.sessions?.values() || []) {
+          if (session.socketId === socket.id) session.expiresAt = Date.now() + 120000;
+        }
+        evaluateBufferPause(room);
+        publishRoomFeatures(room);
         console.log(`User ${username} left room: ${roomId}`);
 
         if (!isBroadcaster) {
@@ -2350,7 +2590,7 @@ io.on('connection', (socket) => {
           }
 
           // If the leaving user was host and was streaming a browser tab, stop it
-          if (wasHost && room.isLiveStreaming) {
+          if (wasHost && room.isLiveStreaming && !room.users.some(u => u.isBroadcaster)) {
             room.isLiveStreaming = false;
             const stream = activeLiveStreams.get(roomId);
             if (stream) {

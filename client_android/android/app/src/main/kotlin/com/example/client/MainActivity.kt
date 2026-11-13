@@ -13,6 +13,18 @@ import java.io.File
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "com.example.client/permissions"
     private var pendingApkPath: String? = null
+    private var inviteChannel: MethodChannel? = null
+    private var pendingInvite: String? = null
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        pendingInvite = inviteFrom(intent)
+        if (pendingInvite != null) inviteChannel?.invokeMethod("inviteAvailable", null)
+    }
+
+    private fun inviteFrom(intent: Intent?): String? =
+        intent?.data?.takeIf { it.scheme == "luna" && it.host == "invite" }?.toString()
 
     override fun onResume() {
         super.onResume()
@@ -37,6 +49,18 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        pendingInvite = pendingInvite ?: inviteFrom(intent)
+        inviteChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "luna/invites").apply {
+            setMethodCallHandler { call, result ->
+                if (call.method == "takeInvite") {
+                    val value = pendingInvite
+                    pendingInvite = null
+                    result.success(value)
+                } else {
+                    result.notImplemented()
+                }
+            }
+        }
         volumeControlStream = android.media.AudioManager.STREAM_MUSIC
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
@@ -91,5 +115,11 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+    }
+
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        inviteChannel?.setMethodCallHandler(null)
+        inviteChannel = null
+        super.cleanUpFlutterEngine(flutterEngine)
     }
 }

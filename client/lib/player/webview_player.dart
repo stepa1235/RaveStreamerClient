@@ -38,6 +38,7 @@ class PlayerTrack {
 }
 
 class WebviewPlayerState {
+  int readyState = 0;
   bool playing = false;
   Duration position = Duration.zero;
   Duration duration = Duration.zero;
@@ -358,6 +359,7 @@ class WebviewPlayer {
           final data = jsonDecode(event) as Map<String, dynamic>;
           final type = data['type'] as String?;
           if (type == 'state') {
+            state.readyState = data['readyState'] as int? ?? 0;
             state.playing = data['playing'] as bool? ?? false;
             state.position = Duration(milliseconds: data['position'] as int? ?? 0);
             state.duration = Duration(milliseconds: data['duration'] as int? ?? 0);
@@ -412,7 +414,8 @@ class WebviewPlayer {
     }
   }
 
-  Future<void> open(Media media, {bool play = false}) async {
+  Future<void> open(Media media, {bool play = false, double startSeconds = 0}) async {
+    state.readyState = 0;
     if (!_isInitialized) return;
 
     final headers = <String, String>{};
@@ -458,6 +461,7 @@ class WebviewPlayer {
       'url': playUrl,
       'headers': headers,
       'play': play,
+      'startSeconds': startSeconds,
     };
 
     await controller.postWebMessage(jsonEncode(cmd));
@@ -647,6 +651,7 @@ const String _htmlPlayerCode = r'''
     function sendState() {
       const state = {
         type: 'state',
+        readyState: video.readyState,
         playing: !video.paused,
         position: Math.floor(video.currentTime * 1000),
         duration: Math.floor(video.duration * 1000) || 0,
@@ -700,7 +705,18 @@ const String _htmlPlayerCode = r'''
 
     video.addEventListener('play', sendState);
     video.addEventListener('pause', sendState);
+    let pendingSeek = null;
+    video.addEventListener('loadedmetadata', () => {
+      if (pendingSeek !== null) {
+        video.currentTime = pendingSeek;
+        pendingSeek = null;
+      }
+      sendState();
+    });
     video.addEventListener('timeupdate', sendState);
+    for (const event of ['loadstart', 'waiting', 'stalled', 'canplay', 'playing', 'seeking', 'seeked', 'emptied']) {
+      video.addEventListener(event, sendState);
+    }
     video.addEventListener('durationchange', sendState);
     video.addEventListener('volumechange', sendState);
     video.addEventListener('ratechange', sendState);
@@ -712,6 +728,7 @@ const String _htmlPlayerCode = r'''
       try {
         let cmd = typeof e.data === 'string' ? JSON.parse(e.data) : e.data;
         if (cmd.action === 'load') {
+          pendingSeek = cmd.startSeconds > 0 ? cmd.startSeconds : null;
           const url = cmd.url;
 
           video.pause();
@@ -777,7 +794,8 @@ const String _htmlPlayerCode = r'''
         } else if (cmd.action === 'pause') {
           video.pause();
         } else if (cmd.action === 'seek') {
-          video.currentTime = cmd.time;
+          if (video.readyState === 0) pendingSeek = cmd.time;
+          else video.currentTime = cmd.time;
         } else if (cmd.action === 'volume') {
           video.volume = cmd.volume / 100;
         } else if (cmd.action === 'rate') {

@@ -1,5 +1,6 @@
 #include <flutter/dart_project.h>
 #include <flutter/flutter_view_controller.h>
+#include <filesystem>
 #include <windows.h>
 
 #include "flutter_window.h"
@@ -17,7 +18,15 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   // plugins.
   ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
-  flutter::DartProject project(L"data");
+  wchar_t executable_path[32768];
+  const DWORD path_length =
+      GetModuleFileNameW(nullptr, executable_path, ARRAYSIZE(executable_path));
+  if (path_length == 0 || path_length >= ARRAYSIZE(executable_path)) {
+    return EXIT_FAILURE;
+  }
+  const auto data_path =
+      std::filesystem::path(executable_path).parent_path() / L"data";
+  flutter::DartProject project(data_path.wstring());
 
   std::vector<std::string> command_line_arguments =
       GetCommandLineArguments();

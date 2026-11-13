@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'package:http/http.dart' as http;
 import 'package:luna_updates/luna_updates.dart';
+import 'package:luna_room/luna_room.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:webview_windows/webview_windows.dart';
 import 'package:local_notifier/local_notifier.dart';
@@ -35,6 +36,7 @@ class RoomPage extends StatefulWidget {
   final double chatFontSize;
   final ValueChanged<double> onChatFontSizeChange;
   final String clientId;
+  final String? inviteToken;
 
   const RoomPage({
     super.key,
@@ -42,6 +44,7 @@ class RoomPage extends StatefulWidget {
     required this.username,
     required this.roomId,
     this.password,
+    this.inviteToken,
     required this.locale,
     required this.onLocaleChange,
     required this.themeName,
@@ -104,12 +107,259 @@ class _RoomPageState extends State<RoomPage> {
     return false;
   }
 
+  final _roomFeatures = ValueNotifier<Map<String, dynamic>>({});
+  String? _resumeToken;
+  String? _acceptedPassword;
+  String? _sentReadiness;
+  bool _reconnecting = false;
+  bool _reviewingBookmark = false;
+  int _mediaRequest = 0;
+  bool _loadingMedia = false;
+  Map<String, dynamic>? _pendingRoomState;
+  double? _serverPosition;
+  bool _serverPlaying = false;
+  DateTime? _serverPositionAt;
+
+  String _roomText(String ru, String en) => _locale == 'ru' ? ru : en;
+
+  bool get _canControlRoom {
+    final me = roomEntries(_roomFeatures.value['viewers'])
+        .where((member) => member['id'] == _socket.id).firstOrNull;
+    return me?['isHost'] == true || me?['cohost'] == true;
+  }
+
+  void _sendRoomTool(String event, Map<String, dynamic> data) {
+    if (!_socket.connected || _reconnecting || !_hasJoinedRoom) return;
+    _socket.emit(event, {'roomId': widget.roomId, ...data});
+  }
+
+  Future<dynamic> _requestRoomTool(String event, Map<String, dynamic> data) async {
+    if (!_socket.connected || _reconnecting || !_hasJoinedRoom) {
+      throw StateError('Room connection is unavailable');
+    }
+    return _socket.timeout(4000).emitWithAckAsync(event, {'roomId': widget.roomId, ...data});
+  }
+
+  void _applyRoomState() {
+    if (_mkPlayer == null || _pendingRoomState == null || !_socket.connected) return;
+    final data = _pendingRoomState!;
+    _pendingRoomState = null;
+    final videoUrl = data['videoUrl']?.toString() ?? '';
+    final videoName = data['videoName']?.toString() ?? 'No Video Loaded';
+    final isPlaying = data['isPlaying'] == true;
+    final calculatedTime = (data['calculatedTime'] is num) ? (data['calculatedTime'] as num).toDouble() : 0.0;
+    final queueData = data['queue'] is List ? (data['queue'] as List<dynamic>) : <dynamic>[];
+    final headers = data['headers'] is Map ? Map<String, dynamic>.from(data['headers'] as Map) : null;
+    final isLive = data['isLiveStreaming'] == true;
+    final hostUser = data['hostUsername']?.toString();
+    final isHostState = data['isHost'] == true;
+    final hostTok = data['hostToken']?.toString();
+
+    if (isHostState && hostTok != null && hostTok.isNotEmpty) {
+      _hostToken = hostTok;
+      saveHostToken(widget.roomId, hostTok);
+    } else if (!isHostState && _hostToken != null) {
+      _hostToken = null;
+      removeHostToken(widget.roomId);
+    }
+
+    _rememberPlayback(isPlaying, calculatedTime);
+    _sentReadiness = null;
+    setState(() {
+      _hasJoinedRoom = true;
+      _reconnecting = false;
+      _queue = queueData;
+      _isLiveStreaming = isLive;
+      if (hostUser != null && hostUser.isNotEmpty) {
+        _hostUsername = hostUser;
+      }
+    });
+
+    if (isLive) {
+      setState(() {
+        _isLiveStreaming = true;
+      });
+      _triggerControlsVisibility();
+      try { _mkPlayer?.pause(); } catch (_) {}
+      if (_isLocalStreamHost) {
+        _webrtcManager?.setAudioMuted(_hostAudioMuted);
+      } else {
+        _webrtcManager?.setAudioMuted(false);
+      }
+      _socket.emit('new-viewer', {'roomId': widget.roomId, 'viewerId': _socket.id});
+    } else if (videoUrl.isNotEmpty) {
+      _setupVideoPlayer(videoUrl, videoName, startPlaying: isPlaying, startSeconds: calculatedTime, headers: headers);
+    } else if (_currentVideoUrl.isNotEmpty) {
+      _mkPlayer?.pause();
+      _mkPlayer?.open(Media(''));
+      setState(() {
+        _currentVideoUrl = '';
+        _currentVideoName = 'No Video Loaded';
+      });
+    }
+  }
+
+  void _rememberPlayback(bool playing, double position) {
+    _serverPosition = position;
+    _serverPlaying = playing;
+    _serverPositionAt = DateTime.now();
+  }
+
+  double? get _roomPosition {
+    final position = _serverPosition;
+    if (position == null) return null;
+    return position + (_serverPlaying
+        ? DateTime.now().difference(_serverPositionAt!).inMilliseconds / 1000
+        : 0);
+  }
+
+  String get _viewerReadiness {
+    final player = _mkPlayer?.state;
+    if (player == null || _currentVideoUrl.isEmpty || _isLiveStreaming) return 'unknown';
+    if (_loadingMedia) return 'loading';
+    if (player.readyState >= 3 || (!player.playing && player.readyState >= 2 &&
+        _roomFeatures.value['autoPaused'] != true)) return 'ready';
+    return player.playing ? 'buffering' : 'loading';
+  }
+
+  void _reportReadiness() {
+    final media = _roomFeatures.value['mediaId'];
+    if (media == null || _reviewingBookmark) return;
+    final readiness = _viewerReadiness;
+    final status = '$media:$readiness';
+    if (_sentReadiness == status) return;
+    if (!_socket.connected || _reconnecting) return;
+    _sentReadiness = status;
+    _sendRoomTool('room-readiness', {'mediaId': media, 'readiness': readiness});
+  }
+
+  bool _canBookmark() => _socket.connected && !_reconnecting &&
+      _roomFeatures.value['mediaId'] is String &&
+      !_isLiveStreaming && (_mkPlayer?.state.duration.inMilliseconds ?? 0) > 0;
+
+  void _sendBookmark() {
+    if (!_canBookmark()) return;
+    _sendRoomTool('chat-msg', {
+      'text': _chatInputController.text.trim(),
+      'bookmark': {
+        'mediaId': _roomFeatures.value['mediaId'],
+        'seconds': _mkPlayer!.state.position.inMilliseconds / 1000,
+      },
+    });
+    _chatInputController.clear();
+  }
+
+  Widget _bookmarkButton(Map marker) {
+    final seconds = marker['seconds'];
+    if (seconds is! num || !seconds.isFinite || seconds < 0) return const SizedBox.shrink();
+    return TextButton.icon(
+      onPressed: marker['mediaId'] == _roomFeatures.value['mediaId'] && !_isLiveStreaming
+          ? () {
+              if (_canControlRoom) {
+                _sendRoomTool('seek', {'time': seconds.toDouble()});
+                _handleRemoteSeek(seconds.toDouble());
+              } else {
+                _sendRoomTool('room-readiness', {
+                  'mediaId': marker['mediaId'],
+                  'readiness': 'unknown',
+                });
+                setState(() => _reviewingBookmark = true);
+                _handleRemotePause(seconds.toDouble());
+              }
+            }
+          : null,
+      icon: const Icon(Icons.bookmark_outline, size: 17),
+      label: Text(bookmarkTime(seconds)),
+    );
+  }
+
+  void _resumeWatching() {
+    setState(() => _reviewingBookmark = false);
+    _sentReadiness = null;
+    final position = _roomPosition;
+    if (position == null) return;
+    if (_serverPlaying) {
+      _handleRemotePlay(position);
+    } else {
+      _handleRemotePause(position);
+    }
+  }
+
+  Future<String> _diagnoseRoom() async {
+    final timer = Stopwatch()..start();
+    await _requestRoomTool('room-ping', {});
+    timer.stop();
+    final local = _mkPlayer?.state.position.inMilliseconds;
+    final reference = _roomPosition;
+    final drift = local != null && reference != null && !_isLiveStreaming
+        ? (local - reference * 1000).round()
+        : null;
+    final stats = <String>{};
+    final peers = _webrtcManager?.peerConnections.values.toList() ?? [];
+    for (final peer in peers.take(4)) {
+      try {
+        final reports = await peer.getStats().timeout(const Duration(seconds: 1));
+        final byId = {for (final report in reports) report.id: report};
+        final selected = reports.where((report) => report.type == 'transport')
+            .map((report) => report.values['selectedCandidatePairId']).whereType<String>().toSet();
+        for (final pair in reports.where((report) =>
+            report.type == 'candidate-pair' && (selected.contains(report.id) ||
+                (selected.isEmpty && report.values['nominated'] == true && report.values['state'] == 'succeeded')))) {
+          final localType = byId[pair.values['localCandidateId']]?.values['candidateType'];
+          final remoteType = byId[pair.values['remoteCandidateId']]?.values['candidateType'];
+          if (localType == 'relay' || remoteType == 'relay') {
+            stats.add('TURN');
+          } else if (localType != null && remoteType != null) {
+            stats.add(_roomText('напрямую', 'direct'));
+          }
+        }
+      } catch (_) {
+        // WebRTC statistics are unavailable while a peer is reconnecting.
+      }
+    }
+    final readiness = switch (_viewerReadiness) {
+      'ready' => _roomText('готов', 'ready'),
+      'buffering' => _roomText('буферизация', 'buffering'),
+      'loading' => _roomText('загрузка', 'loading'),
+      _ => _roomText('нет данных', 'unknown'),
+    };
+    final route = stats.isEmpty ? _roomText('нет данных', 'unknown') : stats.join(', ');
+    return [
+      _roomText('Задержка до сервера: ${timer.elapsedMilliseconds} мс', 'Server latency: ${timer.elapsedMilliseconds} ms'),
+      _roomText('Плеер: $readiness', 'Player: $readiness'),
+      if (drift != null) _roomText('Отклонение от комнаты: $drift мс', 'Playback drift: $drift ms'),
+      if (_isLiveStreaming) _roomText('Маршрут WebRTC: $route', 'WebRTC route: $route'),
+    ].join('\n');
+  }
+
+  void _showRoomTools() {
+    showDialog<void>(
+      context: context,
+      builder: (_) => RoomTools(
+        russian: _locale == 'ru',
+        roomId: widget.roomId,
+        server: widget.serverUrl,
+        socketId: () => _socket.id,
+        state: _roomFeatures,
+        send: _sendRoomTool,
+        request: _requestRoomTool,
+        diagnose: _diagnoseRoom,
+        bookmark: _sendBookmark,
+        canBookmark: _canBookmark,
+      ),
+    );
+  }
+
   void _emitJoinRoom({String? passwordOverride}) {
+    if (!_socket.connected) return;
+    if (passwordOverride != null) _acceptedPassword = passwordOverride;
     final tok = _hostToken ?? globalHostTokens[widget.roomId];
     _socket.emit('join-room', {
       'roomId': widget.roomId,
       'username': widget.username,
-      'password': passwordOverride ?? widget.password,
+      'password': _acceptedPassword ?? widget.password,
+      'inviteToken': _resumeToken == null ? widget.inviteToken : null,
+      'resumeToken': _resumeToken,
       'clientId': widget.clientId,
       'hostToken': tok,
     });
@@ -181,11 +431,12 @@ class _RoomPageState extends State<RoomPage> {
           _mkPlayer = player;
           _playerReady = true;
         });
+        _applyRoomState();
       }
     });
     player.stream.completed.listen((completed) {
       if (!completed || _isDisposed || !mounted) return;
-      if (_isHost) _socket.emit('skip-video', {'roomId': widget.roomId});
+      if (_isHost && !_reviewingBookmark) _sendRoomTool('skip-video', {});
     });
     player.stream.error.listen((err) {
       debugPrint('[webview] ERROR: $err');
@@ -268,6 +519,7 @@ class _RoomPageState extends State<RoomPage> {
     _localHttpServer?.close(force: true);
     _socket.disconnect();
     _socket.dispose();
+    _roomFeatures.dispose();
     _urlInputController.dispose();
     _localPathController.dispose();
     _chatInputController.dispose();
@@ -303,7 +555,8 @@ class _RoomPageState extends State<RoomPage> {
   void _initSocket() {
     _socket = io.io(widget.serverUrl, io.OptionBuilder()
       .setTransports(['websocket'])
-      .enableAutoConnect()
+      .disableAutoConnect()
+      .enableForceNew()
       .enableReconnection()
       .setReconnectionDelay(1000)
       .setExtraHeaders({'bypass-tunnel-reminder': 'true'})
@@ -477,11 +730,33 @@ class _RoomPageState extends State<RoomPage> {
 
     _socket.onDisconnect((_) {
       if (_isDisposed || !mounted) return;
+      _sentReadiness = null;
+      _mediaRequest++;
+      _pendingRoomState = null;
+      _loadingMedia = false;
+      _roomFeatures.value = {};
+      _reviewingBookmark = false;
+      if (!_isLiveStreaming) _mkPlayer?.pause();
       setState(() {
+        _reconnecting = _hasJoinedRoom;
         _isConnected = false;
         _users = [];
       });
       _usersNotifier.value = [];
+    });
+
+    _socket.on('room-resume-token', (data) {
+      if (data is Map && data['roomId'] == widget.roomId && data['token'] is String) {
+        _resumeToken = data['token'] as String;
+      }
+    });
+
+    _socket.on('room-features', (data) {
+      if (!mounted || _isDisposed || data is! Map) return;
+      final couldControl = _canControlRoom;
+      final oldMedia = _roomFeatures.value['mediaId'];
+      _roomFeatures.value = Map<String, dynamic>.from(data);
+      if (couldControl != _canControlRoom || oldMedia != data['mediaId']) setState(() {});
     });
 
     // Handle user list updates
@@ -573,49 +848,9 @@ class _RoomPageState extends State<RoomPage> {
     _socket.on('room-state', (data) {
       if (_isDisposed || !mounted) return;
       if (data is! Map) return;
-      final videoUrl = data['videoUrl']?.toString() ?? '';
-      final videoName = data['videoName']?.toString() ?? 'No Video Loaded';
-      final isPlaying = data['isPlaying'] == true;
-      final calculatedTime = (data['calculatedTime'] is num) ? (data['calculatedTime'] as num).toDouble() : 0.0;
-      final queueData = data['queue'] is List ? (data['queue'] as List<dynamic>) : <dynamic>[];
-      final headers = data['headers'] is Map ? Map<String, dynamic>.from(data['headers'] as Map) : null;
-      final isLive = data['isLiveStreaming'] == true;
-      final hostUser = data['hostUsername']?.toString();
-      final isHostState = data['isHost'] == true;
-      final hostTok = data['hostToken']?.toString();
+      _pendingRoomState = Map<String, dynamic>.from(data);
+      _applyRoomState();
 
-      if (isHostState && hostTok != null && hostTok.isNotEmpty) {
-        _hostToken = hostTok;
-        saveHostToken(widget.roomId, hostTok);
-      } else if (!isHostState && _hostToken != null) {
-        _hostToken = null;
-        removeHostToken(widget.roomId);
-      }
-
-      setState(() {
-        _hasJoinedRoom = true;
-        _queue = queueData;
-        _isLiveStreaming = isLive;
-        if (hostUser != null && hostUser.isNotEmpty) {
-          _hostUsername = hostUser;
-        }
-      });
-
-      if (isLive) {
-        setState(() {
-          _isLiveStreaming = true;
-        });
-        _triggerControlsVisibility();
-        try { _mkPlayer?.pause(); } catch (_) {}
-        if (_isLocalStreamHost) {
-          _webrtcManager?.setAudioMuted(_hostAudioMuted);
-        } else {
-          _webrtcManager?.setAudioMuted(false);
-        }
-        _socket.emit('new-viewer', {'roomId': widget.roomId, 'viewerId': _socket.id});
-      } else if (videoUrl.isNotEmpty) {
-        _setupVideoPlayer(videoUrl, videoName, startPlaying: isPlaying, startSeconds: calculatedTime, headers: headers);
-      }
     });
 
     _socket.on('action-error', (data) {
@@ -635,10 +870,14 @@ class _RoomPageState extends State<RoomPage> {
       if (_isDisposed || !mounted) return;
       if (data is! Map) return;
       final videoUrl = data['videoUrl']?.toString() ?? '';
+      if (_reviewingBookmark) setState(() => _reviewingBookmark = false);
+      _rememberPlayback(videoUrl.isNotEmpty, 0);
       final videoName = data['videoName']?.toString() ?? 'No Video Loaded';
       final headers = data['headers'] is Map ? Map<String, dynamic>.from(data['headers'] as Map) : null;
 
       if (videoUrl.isEmpty) {
+        _mediaRequest++;
+        _loadingMedia = false;
         try { _mkPlayer?.open(Media('')); } catch (_) {}
         try { _mkPlayer?.pause(); } catch (_) {}
         try { if (_webrtcManager != null) _webrtcManager!.remoteRenderer.srcObject = null; } catch (_) {}
@@ -695,6 +934,7 @@ class _RoomPageState extends State<RoomPage> {
           'text': text,
           'time': (data['timestamp'] ?? data['time'] ?? '').toString(),
           'imageUrl': imageUrl,
+          'bookmark': data['bookmark'],
           'replyTo': replyTo,
           'reactions': reactions,
         });
@@ -751,21 +991,24 @@ class _RoomPageState extends State<RoomPage> {
     _socket.on('played', (data) {
       if (_isDisposed || !mounted) return;
       final time = (data is Map && data['time'] is num) ? (data['time'] as num).toDouble() : 0.0;
-      _handleRemotePlay(time);
+      _rememberPlayback(true, time);
+      if (!_reviewingBookmark) _handleRemotePlay(time);
     });
 
     // Handle remote pause event
     _socket.on('paused', (data) {
       if (_isDisposed || !mounted) return;
       final time = (data is Map && data['time'] is num) ? (data['time'] as num).toDouble() : 0.0;
-      _handleRemotePause(time);
+      _rememberPlayback(false, time);
+      if (!_reviewingBookmark) _handleRemotePause(time);
     });
 
     // Handle remote seek event
     _socket.on('seeked', (data) {
       if (_isDisposed || !mounted) return;
       final time = (data is Map && data['time'] is num) ? (data['time'] as num).toDouble() : 0.0;
-      _handleRemoteSeek(time);
+      _rememberPlayback(_serverPlaying, time);
+      if (!_reviewingBookmark) _handleRemoteSeek(time);
     });
 
     // Handle continuous background sync
@@ -774,7 +1017,8 @@ class _RoomPageState extends State<RoomPage> {
       if (data is! Map) return;
       final isPlaying = data['isPlaying'] == true;
       final currentTime = (data['currentTime'] is num) ? (data['currentTime'] as num).toDouble() : 0.0;
-      _handlePeriodicSync(isPlaying, currentTime);
+      _rememberPlayback(isPlaying, currentTime);
+      if (!_reviewingBookmark) _handlePeriodicSync(isPlaying, currentTime);
     });
 
     // Handle Chat History (e.g. on rejoin/reconnect)
@@ -803,6 +1047,7 @@ class _RoomPageState extends State<RoomPage> {
               'text': (msg['text'] ?? '').toString(),
               'time': (msg['timestamp'] ?? msg['time'] ?? '').toString(),
               'imageUrl': imgUrl,
+              'bookmark': msg['bookmark'],
               'replyTo': repTo,
               'reactions': reacts,
             });
@@ -1513,7 +1758,16 @@ class _RoomPageState extends State<RoomPage> {
   // Set up video player with a specific URL (uses media_kit which supports HLS natively)
   Future<void> _setupVideoPlayer(String url, String name, {bool startPlaying = false, double startSeconds = 0.0, Map<String, dynamic>? headers}) async {
     if (_isDisposed || !mounted) return;
+    final request = ++_mediaRequest;
+    _loadingMedia = true;
+    try {
+      await _loadRoomVideo(url, name, request, startPlaying, startSeconds, headers, Stopwatch()..start());
+    } finally {
+      if (request == _mediaRequest) _loadingMedia = false;
+    }
+  }
 
+  Future<void> _loadRoomVideo(String url, String name, int request, bool startPlaying, double startSeconds, Map<String, dynamic>? headers, Stopwatch loadTime) async {
     setState(() {
       _currentVideoUrl = url;
       _currentVideoName = name;
@@ -1610,7 +1864,7 @@ class _RoomPageState extends State<RoomPage> {
       });
     }
 
-    if (_isDisposed || !mounted) return;
+    if (_isDisposed || !mounted || request != _mediaRequest) return;
     final sanitizedLogUrl = () {
       try {
         final uri = Uri.parse(playUrl);
@@ -1628,17 +1882,12 @@ class _RoomPageState extends State<RoomPage> {
       // Reuse the pre-created player — Webview is always in the tree.
       await player.open(
         Media(playUrl, httpHeaders: playerHeaders),
-        play: false,
+        play: startPlaying,
+        startSeconds: startSeconds + (startPlaying && startSeconds > 0
+            ? loadTime.elapsedMilliseconds / 1000
+            : 0),
       );
 
-      if (_isDisposed || !mounted) return;
-
-      if (startSeconds > 0.0) {
-        await player.seek(Duration(milliseconds: (startSeconds * 1000).toInt()));
-      }
-      if (startPlaying) {
-        await player.play();
-      }
     } catch (e) {
       if (!mounted) return;
       debugPrint('Error opening media: $e');
@@ -2044,7 +2293,7 @@ class _RoomPageState extends State<RoomPage> {
 
 
   void _skipVideo() {
-    if (!_isHost) return;
+    if ((!_isHost && !_canControlRoom) || _reconnecting || !_socket.connected) return;
     _socket.emit('skip-video', {
       'roomId': widget.roomId,
     });
@@ -2052,7 +2301,7 @@ class _RoomPageState extends State<RoomPage> {
 
   // Handle local user control events and broadcast them
   void _localPlay() {
-    if (!_isHost) return;
+    if ((!_isHost && !_canControlRoom) || _reconnecting || !_socket.connected) return;
     if (_mkPlayer == null) return;
     _mkPlayer!.play();
     _socket.emit('play', {
@@ -2062,7 +2311,7 @@ class _RoomPageState extends State<RoomPage> {
   }
 
   void _localPause() {
-    if (!_isHost) return;
+    if ((!_isHost && !_canControlRoom) || _reconnecting || !_socket.connected) return;
     if (_mkPlayer == null) return;
     _mkPlayer!.pause();
     _socket.emit('pause', {
@@ -2073,7 +2322,7 @@ class _RoomPageState extends State<RoomPage> {
 
   int _lastSeekSentMs = 0;
   void _localSeek(double seconds) {
-    if (!_isHost) return;
+    if ((!_isHost && !_canControlRoom) || _reconnecting || !_socket.connected) return;
     if (_mkPlayer == null) return;
     _isIncomingUpdate = true;
     _mkPlayer!.seek(Duration(milliseconds: (seconds * 1000).toInt())).then((_) {
@@ -2090,9 +2339,11 @@ class _RoomPageState extends State<RoomPage> {
 
   // Host sends its current playing details so others can synchronize to it
   void _sendPeriodicSync() {
-    if (_mkPlayer == null || !_isConnected) return;
+    if (_mkPlayer == null || !_isConnected || _reconnecting || !_hasJoinedRoom) return;
+    _reportReadiness();
 
-    if (_isHost) {
+    if (_isHost && !_loadingMedia && !_isIncomingUpdate && _roomFeatures.value['autoPaused'] != true) {
+      _rememberPlayback(_mkPlayer!.state.playing, _mkPlayer!.state.position.inMilliseconds / 1000);
       _socket.emit('sync-state', {
         'roomId': widget.roomId,
         'isPlaying': _mkPlayer!.state.playing,
@@ -2711,7 +2962,6 @@ class _RoomPageState extends State<RoomPage> {
       });
 
       const roomId = ${jsonEncode(widget.roomId)};
-      const password = ${jsonEncode(widget.password ?? '')};
       const username = ${jsonEncode('${widget.username}\u200B')};
       const clientId = ${jsonEncode(widget.clientId)};
       const hostToken = ${jsonEncode(_hostToken ?? globalHostTokens[widget.roomId] ?? '')};
@@ -2742,8 +2992,14 @@ class _RoomPageState extends State<RoomPage> {
 
       socket.on('connect', () => {
         document.getElementById('status').innerText = 'Подключено к серверу! Нажмите кнопку выше, чтобы выбрать вкладку.';
-        socket.emit('join-room', { roomId, username, password, clientId, hostToken, isBroadcaster: true });
+        socket.emit('join-room', { roomId, username, clientId, hostToken, isBroadcaster: true });
         socket.emit('get-ice-servers', { roomId });
+      });
+
+      socket.on('room-state', () => {
+        if (localStream && localStream.getVideoTracks().some(track => track.readyState === 'live')) {
+          socket.emit('start-stream', { roomId });
+        }
       });
 
       socket.on('connect_error', (err) => {
@@ -2854,6 +3110,15 @@ class _RoomPageState extends State<RoomPage> {
 
       socket.on('room-users', async (users) => {
         latestUsers = users || [];
+        const active = new Set(latestUsers.map(user => user.id || user));
+        for (const [id, peer] of Object.entries(peerConnections)) {
+          if (!active.has(id)) {
+            peer.close();
+            delete peerConnections[id];
+            delete iceCandidateQueue[id];
+            delete hasRemoteDescription[id];
+          }
+        }
         if (!localStream) return;
         for (const user of latestUsers) {
           const uId = user.id || user;
@@ -3212,14 +3477,15 @@ class _RoomPageState extends State<RoomPage> {
               height: 10,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: _isConnected ? Colors.greenAccent : Colors.redAccent,
+                color: _reconnecting ? Colors.orangeAccent : (_isConnected ? Colors.greenAccent : Colors.redAccent),
               ),
             ),
             const SizedBox(width: 10),
-            Text(
-              '${_loc('room')}${widget.roomId}',
+            Flexible(child: Text(
+              _reconnecting ? _roomText('Переподключение…', 'Reconnecting…') : '${_loc('room')}${widget.roomId}',
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-            ),
+            )),
             const SizedBox(width: 8),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -3237,6 +3503,17 @@ class _RoomPageState extends State<RoomPage> {
         backgroundColor: const Color(0xFF0F0C1B),
         elevation: 0,
         actions: [
+          if (_reviewingBookmark)
+            IconButton(
+              tooltip: _roomText('Вернуться к просмотру комнаты', 'Return to room playback'),
+              icon: const Icon(Icons.sync),
+              onPressed: _resumeWatching,
+            ),
+          IconButton(
+            tooltip: _roomText('Совместный просмотр', 'Watch together'),
+            icon: const Icon(Icons.groups_outlined),
+            onPressed: _showRoomTools,
+          ),
           IconButton(
             icon: Icon(_isSidebarVisible ? Icons.menu_open : Icons.menu),
             onPressed: () {
@@ -3423,7 +3700,7 @@ class _RoomPageState extends State<RoomPage> {
   Widget _buildVideoControlsOverlay() {
     if (_mkPlayer == null) return const SizedBox.shrink();
 
-    final isMeHost = _isHost;
+    final isMeHost = _isHost || _canControlRoom;
 
     final position = _mkPlayer!.state.position;
     final duration = _mkPlayer!.state.duration;
@@ -3860,7 +4137,7 @@ class _RoomPageState extends State<RoomPage> {
 
   Widget _buildControlsTab() {
     // Check if the current user is host
-    final isMeHost = _isHost;
+    final isMeHost = _isHost || _canControlRoom;
 
     if (!isMeHost) {
       return SingleChildScrollView(
@@ -3956,7 +4233,7 @@ class _RoomPageState extends State<RoomPage> {
           const SizedBox(height: 10),
 
           // Tab Streaming Button (Windows Host Only)
-          if (Platform.isWindows && isMeHost) ...[
+          if (Platform.isWindows && _isHost) ...[
             _buildCard(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -4919,6 +5196,8 @@ class _RoomPageState extends State<RoomPage> {
                                           const SizedBox(height: 4),
                                         ],
                                         // Message text
+                                        if (msg['bookmark'] case final Map marker)
+                                          _bookmarkButton(marker),
                                         if (msg['text'] != null && (msg['text'] as String).isNotEmpty)
                                           Text(
                                             msg['text'] ?? '',
