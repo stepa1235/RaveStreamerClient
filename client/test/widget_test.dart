@@ -1,30 +1,57 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-
-import 'package:client/main.dart';
+import 'package:client/screens/connection_page.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const RaveStreamerApp());
+  testWidgets('Settings preview is applied only when saved', (tester) async {
+    final saved = <(String, String, double)>[];
+    await tester.pumpWidget(MaterialApp(
+      home: ConnectionPage(
+        locale: 'ru',
+        onLocaleChange: (_) {},
+        themeName: 'Dark',
+        onThemeChange: (_) {},
+        initialUsername: 'Tester',
+        initialServerUrl: 'http://luna.lumigrid.ru:3000',
+        onSavedConnection: (_, _) {},
+        chatFontSize: 12,
+        onChatFontSizeChange: (_) {},
+        clientId: 'settings-test',
+        onPreferencesSaved: (language, theme, size) {
+          saved.add((language, theme, size));
+        },
+      ),
+    ));
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    Future<void> openSettings() async {
+      await tester.tap(find.text('Настройки'));
+      await tester.pumpAndSettle();
+      expect(find.text('Настройки Luna'), findsOneWidget);
+    }
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
+    await openSettings();
+    await tester.tap(find.text('English'));
+    await tester.pumpAndSettle();
+    expect(find.text('Luna settings'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(saved, isEmpty);
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    await openSettings();
+    await tester.tap(find.text('English'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Neon Cyan'));
+    await tester.pumpAndSettle();
+    final slider = tester.widget<Slider>(find.byType(Slider));
+    slider.onChanged!(18);
+    await tester.pumpAndSettle();
+    final preview = tester.widget<Text>(
+      find.text('This is how a chat message will look.'),
+    );
+    expect(preview.style?.fontSize, 18);
+    expect(saved, isEmpty);
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    expect(saved, [('en', 'Neon Cyan', 18.0)]);
   });
 }

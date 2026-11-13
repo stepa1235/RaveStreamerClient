@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Luna Server Admin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
+  <style>
+    :root {
+      --bg-deep:     #08071a;
+      --bg-dark:     #0d0c24;
+      --bg-card:     rgba(255,255,255,0.04);
+      --bg-card-h:   rgba(255,255,255,0.07);
+      --border:      rgba(255,255,255,0.08);
+      --border-glow: rgba(138,92,246,0.4);
+      --purple-400:  #a78bfa;
+      --purple-500:  #8b5cf6;
+      --purple-600:  #7c3aed;
+      --cyan-400:    #22d3ee;
+      --cyan-500:    #06b6d4;
+      --green-400:   #4ade80;
+      --green-glow:  rgba(74,222,128,0.35);
+      --red-400:     #f87171;
+      --red-glow:    rgba(248,113,113,0.35);
+      --amber-400:   #fbbf24;
+      --text-primary:   #f1f0ff;
+      --text-secondary: #9ca3af;
+      --text-muted:     #6b7280;
+      --font: 'Inter', system-ui, sans-serif;
+      --mono: 'JetBrains Mono', monospace;
+      --r:  12px;
+      --rl: 16px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: var(--font);
+      background: var(--bg-deep);
+      color: var(--text-primary);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+    body::before {
+      content:'';position:fixed;inset:0;
+      background-image: linear-gradient(rgba(138,92,246,.03) 1px,transparent 1px),
+                        linear-gradient(90deg,rgba(138,92,246,.03) 1px,transparent 1px);
+      background-size:48px 48px;pointer-events:none;z-index:0;
+    }
+    body::after {
+      content:'';position:fixed;top:-40%;left:50%;transform:translateX(-50%);
+      width:900px;height:600px;
+      background:radial-gradient(ellipse,rgba(139,92,246,.12) 0%,transparent 70%);
+      pointer-events:none;z-index:0;
+    }
+
+    .app { position:relative;z-index:1; }
+
+    /* TOPBAR */
+    .topbar {
+      display:flex;align-items:center;justify-content:space-between;
+      padding:14px 28px;
+      background:rgba(13,12,36,.85);backdrop-filter:blur(20px);
+      border-bottom:1px solid var(--border);
+      position:sticky;top:0;z-index:100;
+    }
+    .brand { display:flex;align-items:center;gap:12px; }
+    .brand-icon {
+      width:38px;height:38px;
+      background:linear-gradient(135deg,var(--purple-500),var(--cyan-500));
+      border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:20px;
+    }
+    .brand-name {
+      font-size:18px;font-weight:800;
+      background:linear-gradient(90deg,var(--purple-400),var(--cyan-400));
+      -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+    }
+    .brand-sub { font-size:11px;color:var(--text-muted);font-weight:600;letter-spacing:.08em;text-transform:uppercase;margin-top:1px; }
+
+    .topbar-right { display:flex;align-items:center;gap:12px; }
+
+    /* STATUS BADGE */
+    .sbadge {
+      display:flex;align-items:center;gap:8px;
+      padding:6px 14px;border-radius:999px;font-size:13px;font-weight:600;border:1px solid;
+      transition:all .4s;
+    }
+    .sbadge.online  { background:rgba(74,222,128,.1); border-color:rgba(74,222,128,.3); color:var(--green-400); }
+    .sbadge.offline { background:rgba(248,113,113,.1);border-color:rgba(248,113,113,.3);color:var(--red-400); }
+    .sbadge.checking{ background:rgba(251,191,36,.1); border-color:rgba(251,191,36,.3); color:var(--amber-400); }
+    .sbadge .dot { width:8px;height:8px;border-radius:50%;background:currentColor; }
+    .sbadge.online .dot { animation:pulse-g 1.8s infinite; }
+    @keyframes pulse-g { 0%,100%{box-shadow:0 0 0 0 var(--green-glow)}50%{box-shadow:0 0 0 6px transparent} }
+
+    .version-tag {
+      font-size:12px;font-weight:600;color:var(--purple-400);
+      background:rgba(139,92,246,.12);border:1px solid rgba(139,92,246,.3);
+      padding:5px 12px;border-radius:999px;font-family:var(--mono);
+    }
+
+    /* BUTTONS */
+    .btn {
+      display:inline-flex;align-items:center;gap:7px;
+      padding:8px 16px;border-radius:var(--r);border:1px solid transparent;
+      font-family:var(--font);font-size:13px;font-weight:600;cursor:pointer;
+      transition:all .2s;text-decoration:none;white-space:nowrap;
+    }
+    .btn-primary { background:linear-gradient(135deg,var(--purple-600),var(--purple-500));color:#fff;box-shadow:0 4px 20px rgba(139,92,246,.3); }
+    .btn-primary:hover { transform:translateY(-1px);box-shadow:0 8px 28px rgba(139,92,246,.45); }
+    .btn-ghost { background:var(--bg-card);border-color:var(--border);color:var(--text-secondary); }
+    .btn-ghost:hover { background:var(--bg-card-h);color:var(--text-primary);border-color:var(--border-glow); }
+    .btn-green { background:rgba(74,222,128,.12);border-color:rgba(74,222,128,.35);color:var(--green-400); }
+    .btn-green:hover { background:rgba(74,222,128,.2); }
+    .btn-red { background:rgba(248,113,113,.12);border-color:rgba(248,113,113,.35);color:var(--red-400); }
+    .btn-red:hover { background:rgba(248,113,113,.25); }
+    .btn-amber { background:rgba(251,191,36,.1);border-color:rgba(251,191,36,.3);color:var(--amber-400); }
+    .btn-amber:hover { background:rgba(251,191,36,.2); }
+    .btn-sm { padding:5px 12px;font-size:12px; }
+    .btn:disabled { opacity:.4;cursor:not-allowed;transform:none!important; }
+
+    /* LAYOUT */
+    .main { max-width:1360px;margin:0 auto;padding:26px 22px; }
+    .section-title {
+      font-size:12px;font-weight:700;color:var(--text-muted);letter-spacing:.1em;
+      text-transform:uppercase;margin-bottom:14px;display:flex;align-items:center;gap:8px;
+    }
+
+    /* CONTROL GRID */
+    .control-grid { display:grid;grid-template-columns:1fr;gap:16px;margin-bottom:28px; }
+    .ctrl-box {
+      background:var(--bg-card);border:1px solid var(--border);border-radius:var(--rl);
+      padding:20px 24px;display:flex;align-items:center;justify-content:space-between;
+      transition:all .3s;gap:20px;flex-wrap:wrap;
+    }
+    .ctrl-box:hover { border-color:var(--border-glow);background:var(--bg-card-h); }
+    .ctrl-box-title { display:flex;align-items:center;gap:12px;margin-bottom:6px; }
+    .ctrl-name { font-size:17px;font-weight:700; }
+    .ctrl-desc { font-size:12px;color:var(--text-muted);font-family:var(--mono); }
+    .ctrl-info { font-size:13px;color:var(--text-secondary);line-height:1.6; }
+    .ctrl-actions { display:flex;gap:10px;align-items:center;flex-wrap:wrap; }
+
+    /* METRICS */
+    .metrics-grid { display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:28px; }
+    .metric-card {
+      background:var(--bg-card);border:1px solid var(--border);border-radius:var(--r);
+      padding:16px;position:relative;overflow:hidden;transition:all .2s;
+    }
+    .metric-card:hover { border-color:var(--border-glow); }
+    .metric-card::before { content:'';position:absolute;top:0;left:0;right:0;height:2px;background:var(--acc,var(--purple-500)); }
+    .mi { font-size:20px;display:block;margin-bottom:8px; }
+    .mv { font-size:24px;font-weight:800;letter-spacing:-.02em;font-family:var(--mono); }
+    .ml2 { font-size:11px;color:var(--text-muted);margin-top:2px;font-weight:500;text-transform:uppercase;letter-spacing:.05em; }
+
+    /* CONTENT GRID */
+    .content-grid { display:grid;grid-template-columns:1fr 340px;gap:20px;margin-bottom:28px; }
+    @media (max-width:960px) { .content-grid { grid-template-columns:1fr; } }
+
+    /* ROOMS */
+    .rooms-panel {
+      background:var(--bg-card);border:1px solid var(--border);border-radius:var(--rl);
+      padding:20px;min-height:260px;
+    }
+    .rooms-empty {
+      display:flex;flex-direction:column;align-items:center;justify-content:center;
+      height:220px;color:var(--text-muted);font-size:14px;
+    }
+    .rooms-empty-icon { font-size:42px;margin-bottom:10px;opacity:.6; }
+    .room-card {
+      background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:var(--r);
+      padding:16px;margin-bottom:12px;transition:all .2s;
+    }
+    .room-card:hover { border-color:var(--border-glow);background:var(--bg-card-h); }
+    .room-header { display:flex;align-items:center;justify-content:space-between;margin-bottom:8px; }
+    .room-id { font-size:16px;font-weight:700;font-family:var(--mono);color:var(--purple-400); }
+    .rbadge { font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px; }
+    .rbadge.live { background:rgba(248,113,113,.2);color:var(--red-400); }
+    .rbadge.active { background:rgba(74,222,128,.15);color:var(--green-400); }
+    .room-video { font-size:13px;color:var(--text-secondary);margin-bottom:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+    .room-users { display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px; }
+    .uchip {
+      display:inline-flex;align-items:center;gap:5px;background:rgba(255,255,255,.05);
+      border:1px solid var(--border);border-radius:999px;padding:3px 10px;font-size:12px;
+    }
+    .uchip.host { border-color:rgba(251,191,36,.4);color:var(--amber-400); }
+    .udot { width:6px;height:6px;border-radius:50%;background:var(--green-400); }
+    .room-actions { display:flex;gap:8px;padding-top:10px;border-top:1px solid rgba(255,255,255,.05); }
+
+    /* SIDEBAR */
+    .sidebar { display:flex;flex-direction:column;gap:16px; }
+    .card { background:var(--bg-card);border:1px solid var(--border);border-radius:var(--rl);padding:18px; }
+    .card-title { font-size:13px;font-weight:700;margin-bottom:14px;color:var(--text-secondary);display:flex;align-items:center;gap:7px; }
+    .info-row { display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.04);font-size:13px; }
+    .info-row:last-child { border-bottom:none; }
+    .ik { color:var(--text-muted); }
+    .iv { font-family:var(--mono);font-size:12px;font-weight:600; }
+    .iv.ok { color:var(--green-400); }
+    .iv.err { color:var(--red-400); }
+
+    /* LOGS */
+    .logs-panel { background:var(--bg-card);border:1px solid var(--border);border-radius:var(--rl);padding:20px; }
+    .log-controls { display:flex;align-items:center;gap:12px;margin-bottom:12px; }
+    .log-body {
+      background:#04030f;border:1px solid rgba(255,255,255,.06);border-radius:var(--r);
+      height:260px;overflow-y:auto;padding:12px 14px;font-family:var(--mono);font-size:12px;
+      line-height:1.6;display:flex;flex-direction:column;gap:2px;
+    }
+    .log-line { display:flex;gap:10px; }
+    .log-time { color:var(--text-muted);white-space:nowrap;flex-shrink:0; }
+    .log-msg { word-break:break-all; }
+    .log-line.ok .log-msg   { color:var(--green-400); }
+    .log-line.error .log-msg{ color:var(--red-400); }
+    .log-line.warn .log-msg { color:var(--amber-400); }
+    .log-line.sys .log-msg  { color:var(--purple-400); }
+    .log-line.info .log-msg { color:var(--cyan-400); }
+
+    /* MODAL */
+    .modal-overlay {
+      display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);backdrop-filter:blur(4px);
+      z-index:200;align-items:center;justify-content:center;
+    }
+    .modal-overlay.open { display:flex; }
+    .modal-box {
+      background:#100e28;border:1px solid var(--border-glow);border-radius:var(--rl);
+      padding:24px;width:90%;max-width:440px;box-shadow:0 12px 40px rgba(0,0,0,.6);
+      animation:su .18s ease;
+    }
+    @keyframes su { from { transform:translateY(15px);opacity:0; } to { transform:translateY(0);opacity:1; } }
+    .modal-box h3 { font-size:16px;font-weight:700;margin-bottom:16px;display:flex;align-items:center;gap:8px; }
+    .modal-box label { font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:6px; }
+    .modal-box input, .modal-box textarea {
+      width:100%;background:rgba(255,255,255,.05);border:1px solid var(--border);border-radius:var(--r);
+      color:var(--text-primary);padding:10px 14px;font-size:13px;font-family:inherit;margin-bottom:14px;
+    }
+    .modal-box textarea { resize:vertical;min-height:90px; }
+    .modal-box input:focus, .modal-box textarea:focus { outline:none;border-color:var(--purple-500); }
+    .modal-actions { display:flex;gap:10px;justify-content:flex-end;margin-top:6px; }
+
+    /* TOAST */
+    #toast-container { position:fixed;bottom:24px;right:24px;z-index:999;display:flex;flex-direction:column;gap:8px; }
+    .toast {
+      padding:10px 18px;border-radius:var(--r);font-size:13px;font-weight:600;
+      background:rgba(13,12,36,.95);border:1px solid;backdrop-filter:blur(10px);
+      box-shadow:0 8px 24px rgba(0,0,0,.5);animation:toast-in .2s ease;
+    }
+    .toast.success { border-color:var(--green-400);color:var(--green-400); }
+    .toast.error   { border-color:var(--red-400);color:var(--red-400); }
+    .toast.info    { border-color:var(--purple-400);color:var(--purple-400); }
+    @keyframes toast-in { from { transform:translateY(12px);opacity:0; } to { transform:translateY(0);opacity:1; } }
+
+    .spin { display:inline-block;width:14px;height:14px;border:2px solid transparent;border-top-color:currentColor;border-radius:50%;animation:spin .6s linear infinite; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+
+    #conn-overlay {
+      position:fixed;inset:0;background:var(--bg-deep);z-index:9999;
+      display:flex;flex-direction:column;align-items:center;justify-content:center;
+      gap:16px;transition:opacity .5s,visibility .5s;
+    }
+    #conn-overlay.hidden { opacity:0;visibility:hidden;pointer-events:none; }
+  </style>
+</head>
+<body>
+
+<div id="conn-overlay">
+  <div style="font-size:52px">🌙</div>
+  <div style="font-size:22px;font-weight:700">Luna Server Admin</div>
+  <div style="font-size:13px;color:var(--text-muted)">Подключение к серверу luna.lumigrid.ru...</div>
+  <div class="spin" style="width:30px;height:30px;border-width:3px;border-top-color:var(--purple-500)"></div>
+</div>
+
+<div id="toast-container"></div>
+
+<div class="app">
+  <!-- TOPBAR -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-icon">🌙</div>
+      <div>
+        <div class="brand-name">Luna Admin</div>
+        <div class="brand-sub">Direct Server Control</div>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <div class="sbadge checking" id="srv-badge">
+        <span class="dot"></span><span id="srv-badge-txt">Проверка VPS...</span>
+      </div>
+      <div class="version-tag" id="topbar-version">v—</div>
+      <button class="btn btn-ghost" onclick="refreshAll()" id="btn-refresh">🔄 Обновить</button>
+    </div>
+  </header>
+
+  <main class="main">
+    <!-- CONTROL SECTOR -->
+    <div class="section-title">⚡ Центр управления VPS</div>
+    <div class="control-grid">
+      <div class="ctrl-box">
+        <div>
+          <div class="ctrl-box-title">
+            <div>
+              <div class="ctrl-name">🖥 Выделенный VPS Сервер</div>
+              <div class="ctrl-desc">http://luna.lumigrid.ru:3000</div>
+            </div>
+            <span class="sbadge offline" id="vps-badge"><span class="dot"></span><span id="vps-badge-txt">Offline</span></span>
+          </div>
+          <div class="ctrl-info">
+            <b>Прямой DNS:</b> luna.lumigrid.ru · <b>IP:</b> 195.133.26.226:3000<br>
+            <b>Стек:</b> PM2 · Node.js 22 · Puppeteer Chrome · yt-dlp
+          </div>
+        </div>
+        <div class="ctrl-actions">
+          <button class="btn btn-amber" onclick="restartVps()" id="btn-restart-vps">🔄 Перезапуск PM2</button>
+          <button class="btn btn-ghost" onclick="testHealth()">🏥 Health Check</button>
+          <button class="btn btn-ghost" onclick="testExtract()">🎬 Тест /extract</button>
+          <a href="/health" target="_blank" class="btn btn-ghost btn-sm">🌐 /health</a>
+          <a href="/version" target="_blank" class="btn btn-ghost btn-sm">📦 /version</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- METRICS -->
+    <div class="section-title">📊 Телеметрия и метрики сервера</div>
+    <div class="metrics-grid">
+      <div class="metric-card" style="--acc:linear-gradient(90deg,#8b5cf6,#6366f1)">
+        <span class="mi">🏠</span><div class="mv" id="m-rooms">0</div><div class="ml2">Активных комнат</div>
+      </div>
+      <div class="metric-card" style="--acc:linear-gradient(90deg,#06b6d4,#3b82f6)">
+        <span class="mi">👥</span><div class="mv" id="m-users">0</div><div class="ml2">Пользователей онлайн</div>
+      </div>
+      <div class="metric-card" style="--acc:linear-gradient(90deg,#f59e0b,#ef4444)">
+        <span class="mi">🔴</span><div class="mv" id="m-streams">0</div><div class="ml2">Live стримов</div>
+      </div>
+      <div class="metric-card" style="--acc:linear-gradient(90deg,#10b981,#06b6d4)">
+        <span class="mi">⏱</span><div class="mv" id="m-ping">—</div><div class="ml2">Пинг к VPS (мс)</div>
+      </div>
+      <div class="metric-card" style="--acc:linear-gradient(90deg,#ec4899,#8b5cf6)">
+        <span class="mi">💾</span><div class="mv" id="m-ram">—</div><div class="ml2">Память (RSS)</div>
+      </div>
+      <div class="metric-card" style="--acc:linear-gradient(90deg,#3b82f6,#10b981)">
+        <span class="mi">⏳</span><div class="mv" id="m-uptime">—</div><div class="ml2">Аптайм VPS</div>
+      </div>
+    </div>
+
+    <!-- CONTENT GRID -->
+    <div class="content-grid">
+      <div>
+        <div class="section-title">🏠 Комнаты (Live Socket.io)</div>
+        <div class="rooms-panel" id="rooms-container">
+          <div class="rooms-empty">
+            <div class="rooms-empty-icon">🌙</div>
+            <div>Нет активных комнат</div>
+            <div style="margin-top:5px;font-size:12px;color:var(--text-muted)">Комнаты отобразятся здесь при подключении пользователей</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="sidebar">
+        <div class="card">
+          <div class="card-title">🖥 Информация о VPS</div>
+          <div class="info-row"><span class="ik">Адрес</span><span class="iv" style="color:var(--cyan-400)">luna.lumigrid.ru:3000</span></div>
+          <div class="info-row"><span class="ik">IP адрес</span><span class="iv">195.133.26.226</span></div>
+          <div class="info-row"><span class="ik">Статус HTTP</span><span class="iv" id="si-health">—</span></div>
+          <div class="info-row"><span class="ik">Socket.io</span><span class="iv" id="si-socket">Подключение...</span></div>
+          <div class="info-row"><span class="ik">Время сервера</span><span class="iv" id="si-time">—</span></div>
+          <div class="info-row"><span class="ik">Версия клиента</span><span class="iv" id="si-version">v—</span></div>
+          <div class="info-row"><span class="ik">Версия сервера</span><span class="iv" id="si-srv-version">v1.0.0</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- LOGS -->
+    <div class="section-title">📋 Логи сервера VPS (PM2)</div>
+    <div class="logs-panel">
+      <div class="log-controls">
+        <button class="btn btn-ghost btn-sm" onclick="fetchVpsLogs()">🔄 Обновить логи</button>
+        <button class="btn btn-ghost btn-sm" onclick="clearLogs()">🗑 Очистить</button>
+        <label style="font-size:12px;color:var(--text-muted);display:flex;align-items:center;gap:6px;margin-left:auto;cursor:pointer">
+          <input type="checkbox" id="chk-autoscroll" checked> Автопрокрутка
+        </label>
+      </div>
+      <div class="log-body" id="log-body"></div>
+    </div>
+
+  </main>
+</div>
+
+<!-- MODAL: SEND SERVER MESSAGE -->
+<div class="modal-overlay" id="modal-msg">
+  <div class="modal-box">
+    <h3>💬 Сообщение от сервера</h3>
+    <label>Комната</label>
+    <input type="text" id="msg-room" readonly style="opacity:.6" />
+    <label>Текст сообщения</label>
+    <textarea id="msg-text" placeholder="Введите сообщение от лица сервера..."></textarea>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('modal-msg')">Отмена</button>
+      <button class="btn btn-primary" onclick="submitServerMsg()">📤 Отправить</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: CLOSE ROOM -->
+<div class="modal-overlay" id="modal-close">
+  <div class="modal-box">
+    <h3>🚫 Закрыть комнату</h3>
+    <label>Комната</label>
+    <input type="text" id="close-room" readonly style="opacity:.6" />
+    <label>Причина закрытия</label>
+    <input type="text" id="close-reason" placeholder="Комната закрыта администратором" />
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('modal-close')">Отмена</button>
+      <button class="btn btn-red" onclick="submitCloseRoom()">🚫 Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const SERVER_URL = (window.location.origin && window.location.origin.startsWith('http'))
+  ? window.location.origin
+  : 'http://luna.lumigrid.ru:3000';
+
+let socket    = null;
+let roomsData = {};
+
+function log(msg, type = 'info') {
+  const body = document.getElementById('log-body');
+  if (!body) return;
+  const atBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 40;
+  const now  = new Date().toLocaleTimeString('ru-RU', { hour12: false });
+  const line = document.createElement('div');
+  line.className = 'log-line ' + type;
+  line.innerHTML = '<span class="log-time">' + now + '</span><span class="log-msg">' + escHtml(msg) + '</span>';
+  body.appendChild(line);
+  while (body.children.length > 500) body.removeChild(body.firstChild);
+  const autoScroll = document.getElementById('chk-autoscroll');
+  if (autoScroll?.checked || atBottom) body.scrollTop = body.scrollHeight;
+}
+
+function clearLogs() {
+  const b = document.getElementById('log-body');
+  if (b) b.innerHTML = '';
+}
+
+function toast(msg, type = 'info') {
+  const c = document.getElementById('toast-container');
+  const t = document.createElement('div');
+  t.className = 'toast ' + type;
+  t.textContent = msg;
+  c.appendChild(t);
+  setTimeout(() => { t.style.opacity = '0'; t.style.transition = 'opacity .3s'; setTimeout(() => t.remove(), 300); }, 3500);
+}
+
+function escHtml(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function hideOverlay() {
+  const o = document.getElementById('conn-overlay');
+  if (o) o.classList.add('hidden');
+}
+
+// ─── ADMIN AUTHENTICATION ──────────────────────────────────────────────────
+let adminToken = localStorage.getItem('luna_admin_token') || '';
+
+function getAdminHeaders(extraHeaders = {}) {
+  return {
+    'Authorization': 'Bearer ' + adminToken,
+    'x-admin-token': adminToken,
+    ...extraHeaders
+  };
+}
+
+async function adminFetch(url, options = {}) {
+  options.headers = getAdminHeaders(options.headers || {});
+  let res = await fetch(url, options);
+  if (res.status === 401) {
+    const entered = prompt('Требуется авторизация администратора.\nВведите ключ доступа:');
+    if (entered) {
+      adminToken = entered.trim();
+      localStorage.setItem('luna_admin_token', adminToken);
+      if (socket) {
+        socket.auth = { adminToken };
+        socket.disconnect().connect();
+      }
+      options.headers = getAdminHeaders(options.headers || {});
+      res = await fetch(url, options);
+    }
+  }
+  return res;
+}
+
+// ─── DYNAMIC VERSION ────────────────────────────────────────────────────────
+async function fetchVersion() {
+  try {
+    const res = await fetch(SERVER_URL + '/version');
+    const data = await res.json();
+    if (data.latest_version) {
+      const v = 'v' + data.latest_version;
+      const topBadge = document.getElementById('topbar-version');
+      const sideBadge = document.getElementById('si-version');
+      if (topBadge) topBadge.textContent = v;
+      if (sideBadge) sideBadge.textContent = v;
+    }
+  } catch (e) {
+    console.warn('Failed to fetch dynamic version', e);
+  }
+}
+
+// ─── HEALTH & STATS ─────────────────────────────────────────────────────────
+async function checkHealth() {
+  const t0 = Date.now();
+  try {
+    const res = await fetch(SERVER_URL + '/health', { signal: AbortSignal.timeout(5000) });
+    const ping = Date.now() - t0;
+    document.getElementById('m-ping').textContent = ping;
+    if (res.ok) {
+      setVpsBadge(true, ping);
+      const data = await res.json();
+      if (data.time) {
+        document.getElementById('si-time').textContent = new Date(data.time).toLocaleTimeString('ru-RU');
+      }
+      return true;
+    }
+  } catch (e) {
+    setVpsBadge(false);
+  }
+  return false;
+}
+
+function setVpsBadge(online, ping = null) {
+  const b1 = document.getElementById('srv-badge');
+  const t1 = document.getElementById('srv-badge-txt');
+  const b2 = document.getElementById('vps-badge');
+  const t2 = document.getElementById('vps-badge-txt');
+  const h  = document.getElementById('si-health');
+
+  if (online) {
+    if (b1) { b1.className = 'sbadge online'; t1.textContent = 'VPS Online (' + ping + 'ms)'; }
+    if (b2) { b2.className = 'sbadge online'; t2.textContent = 'Online'; }
+    if (h)  { h.textContent = '✅ 200 OK (' + ping + 'ms)'; h.className = 'iv ok'; }
+  } else {
+    if (b1) { b1.className = 'sbadge offline'; t1.textContent = 'VPS Offline'; }
+    if (b2) { b2.className = 'sbadge offline'; t2.textContent = 'Offline'; }
+    if (h)  { h.textContent = '❌ Не отвечает'; h.className = 'iv err'; }
+    document.getElementById('m-ping').textContent = '—';
+  }
+}
+
+async function fetchVpsStats() {
+  try {
+    const res = await adminFetch(SERVER_URL + '/api/stats', { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return;
+    const d = await res.json();
+    if (d.ok) {
+      if (d.uptime) {
+        const u = Math.floor(d.uptime);
+        const h = Math.floor(u / 3600), m = Math.floor((u % 3600) / 60), s = u % 60;
+        document.getElementById('m-uptime').textContent = (h > 0 ? h + 'ч ' : '') + m + 'м ' + s + 'с';
+      }
+      if (d.memory?.rss) {
+        document.getElementById('m-ram').textContent = Math.round(d.memory.rss / 1024 / 1024) + ' MB';
+      }
+      if (d.rooms) {
+        roomsData = d.rooms;
+        renderRooms();
+      }
+    }
+  } catch (_) {}
+}
+
+async function fetchVpsLogs() {
+  try {
+    const res = await adminFetch(SERVER_URL + '/api/logs', { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return;
+    const d = await res.json();
+    if (d.ok && Array.isArray(d.logs)) {
+      clearLogs();
+      d.logs.forEach(l => {
+        let t = 'info';
+        if (l.includes('Error') || l.includes('error')) t = 'error';
+        else if (l.includes('Warn') || l.includes('warn')) t = 'warn';
+        else if (l.includes('User connected') || l.includes('Room')) t = 'ok';
+        log(l, t);
+      });
+    }
+  } catch (_) {}
+}
+
+// ─── RESTART VPS ────────────────────────────────────────────────────────────
+async function restartVps() {
+  if (!confirm('Перезапустить сервис luna-server (PM2) на сервере?')) return;
+  const btn = document.getElementById('btn-restart-vps');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Перезапуск...'; }
+  log('⚡ Перезапуск службы PM2...', 'sys');
+  toast('⚡ Перезапуск службы PM2...', 'info');
+
+  try {
+    const res = await adminFetch(SERVER_URL + '/api/restart', { method: 'POST' });
+    const d   = await res.json();
+    if (d.ok) {
+      toast('✅ Команда перезапуска отправлена!', 'success');
+      log('✅ Перезапуск выполнен успешно', 'ok');
+      setTimeout(async () => {
+        await checkHealth();
+        await fetchVpsStats();
+      }, 3000);
+    } else {
+      toast('❌ Ошибка перезапуска: ' + (d.error || 'Доступ запрещён'), 'error');
+    }
+  } catch (e) {
+    toast('❌ ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '🔄 Перезапуск PM2'; }
+  }
+}
+
+async function testHealth() {
+  log('Проверка /health...', 'sys');
+  const ok = await checkHealth();
+  toast(ok ? '✅ /health: OK' : '❌ /health: Ошибка', ok ? 'success' : 'error');
+}
+
+async function testExtract() {
+  log('Тестирую /extract на тестовом видео...', 'sys');
+  toast('🎬 Тест парсера...', 'info');
+  const url = 'https://rutube.ru/video/e9d1e5e01b7a7dc3801265bcf41be299/';
+  try {
+    const res = await fetch(SERVER_URL + '/extract?url=' + encodeURIComponent(url), { signal: AbortSignal.timeout(30000) });
+    const d   = await res.json();
+    if (d.videoUrl || d.url) {
+      log('✅ /extract успешен!', 'ok');
+      toast('✅ /extract работает!', 'success');
+    } else {
+      log('⚠️ /extract: ' + JSON.stringify(d), 'warn');
+      toast('⚠️ Парсер вернул неожиданный ответ', 'error');
+    }
+  } catch (e) {
+    log('❌ /extract ошибка: ' + e.message, 'error');
+    toast('❌ Ошибка теста: ' + e.message, 'error');
+  }
+}
+
+function refreshAll() {
+  const btn = document.getElementById('btn-refresh');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spin"></span>'; }
+  Promise.all([checkHealth(), fetchVpsStats(), fetchVpsLogs(), fetchVersion()]).finally(() => {
+    if (btn) { btn.disabled = false; btn.innerHTML = '🔄 Обновить'; }
+    toast('Данные обновлены', 'info');
+  });
+}
+
+// ─── ROOMS & SOCKET ─────────────────────────────────────────────────────────
+function renderRooms() {
+  const ids = Object.keys(roomsData);
+  document.getElementById('m-rooms').textContent = ids.length;
+  let tu = 0, ls = 0;
+  ids.forEach(id => {
+    tu += (roomsData[id].users || []).length;
+    if (roomsData[id].isLiveStreaming) ls++;
+  });
+  document.getElementById('m-users').textContent   = tu;
+  document.getElementById('m-streams').textContent = ls;
+
+  const c = document.getElementById('rooms-container');
+  if (!ids.length) {
+    c.innerHTML = '<div class="rooms-empty"><div class="rooms-empty-icon">🌙</div><div>Нет активных комнат</div><div style="margin-top:5px;font-size:12px;color:var(--text-muted)">Комнаты отобразятся здесь при подключении пользователей</div></div>';
+    return;
+  }
+
+  c.innerHTML = ids.map(id => {
+    const r = roomsData[id];
+    const users = r.users || [];
+    const sid = id.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    return '<div class="room-card">' +
+      '<div class="room-header">' +
+        '<div style="display:flex;align-items:center;gap:8px">' +
+          '<span class="room-id">#' + escHtml(id) + '</span>' +
+          (r.password ? '<span title="Приватная">🔒</span>' : '') +
+        '</div>' +
+        '<div style="display:flex;gap:5px">' +
+          (r.isLiveStreaming ? '<span class="rbadge live">🔴 Live</span>' : '') +
+          '<span class="rbadge active">' + (r.isPlaying ? '▶ Играет' : '⏸ Пауза') + '</span>' +
+        '</div>' +
+      '</div>' +
+      '<div class="room-video">🎬 ' + escHtml(r.videoName || 'Нет видео') + '</div>' +
+      '<div class="room-users">' +
+        users.map((u, i) => '<span class="uchip ' + (i === 0 ? 'host' : '') + '"><span class="udot"></span>' + (i === 0 ? '👑 ' : '') + escHtml(u.username || u.id?.slice(0,6)) + '</span>').join('') +
+        (!users.length ? '<span style="font-size:11px;color:var(--text-muted)">Нет пользователей</span>' : '') +
+      '</div>' +
+      '<div class="room-actions">' +
+        '<button class="btn btn-sm btn-ghost" onclick="openMsgModal(\'' + sid + '\')">💬 Сообщение</button>' +
+        '<button class="btn btn-sm btn-red" onclick="openCloseModal(\'' + sid + '\')">🚫 Закрыть комнату</button>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function connectSocket() {
+  log('Подключаю Socket.io к ' + SERVER_URL + '...', 'sys');
+  socket = io(SERVER_URL, { auth: { adminToken }, transports: ['websocket','polling'], reconnectionDelay: 3000 });
+
+  socket.on('connect', () => {
+    log('✅ Socket.io подключён: id=' + socket.id, 'ok');
+    const s = document.getElementById('si-socket');
+    if (s) { s.textContent = '✅ ' + socket.id?.slice(0,8) + '...'; s.className = 'iv ok'; }
+    hideOverlay();
+  });
+  socket.on('disconnect', r => {
+    log('⚠️ Socket отключён: ' + r, 'warn');
+    const s = document.getElementById('si-socket');
+    if (s) { s.textContent = '❌ Отключён'; s.className = 'iv err'; }
+  });
+  socket.on('connect_error', () => {
+    const s = document.getElementById('si-socket');
+    if (s) { s.textContent = '❌ Ошибка'; s.className = 'iv err'; }
+  });
+  socket.on('admin-stats', data => {
+    if (data.rooms) {
+      roomsData = data.rooms;
+      renderRooms();
+    }
+  });
+}
+
+// ─── MODALS & ACTIONS ───────────────────────────────────────────────────────
+function openMsgModal(roomId) {
+  document.getElementById('msg-room').value = roomId;
+  document.getElementById('msg-text').value = '';
+  document.getElementById('modal-msg').classList.add('open');
+  setTimeout(() => document.getElementById('msg-text').focus(), 50);
+}
+
+function openCloseModal(roomId) {
+  document.getElementById('close-room').value = roomId;
+  document.getElementById('close-reason').value = '';
+  document.getElementById('modal-close').classList.add('open');
+  setTimeout(() => document.getElementById('close-reason').focus(), 50);
+}
+
+function closeModal(id) {
+  document.getElementById(id).classList.remove('open');
+}
+
+async function submitServerMsg() {
+  const roomId  = document.getElementById('msg-room').value;
+  const message = document.getElementById('msg-text').value.trim();
+  if (!message) { toast('Введите текст сообщения', 'error'); return; }
+
+  try {
+    const res = await adminFetch(SERVER_URL + '/api/admin/send-message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roomId, message, sender: 'Сервер' })
+    });
+    const d = await res.json();
+    if (d.ok) {
+      closeModal('modal-msg');
+      toast('Сообщение отправлено от лица сервера ✓', 'success');
+      log('💬 [Сервер -> #' + roomId + ']: ' + message, 'ok');
+    } else {
+      toast('❌ Ошибка: ' + (d.error || 'Не удалось отправить'), 'error');
+    }
+  } catch (e) {
+    toast('❌ Ошибка сети: ' + e.message, 'error');
+  }
+}
+
+async function submitCloseRoom() {
+  const roomId = document.getElementById('close-room').value;
+  const reason = document.getElementById('close-reason').value.trim() || 'Комната закрыта администратором';
+
+  try {
+    const res = await adminFetch(SERVER_URL + '/api/admin/close-room', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ roomId, reason })
+    });
+    const d = await res.json();
+    if (d.ok) {
+      closeModal('modal-close');
+      toast('Комната #' + roomId + ' закрыта ✓', 'success');
+      log('🚫 Комната #' + roomId + ' закрыта администратором. Причина: ' + reason, 'warn');
+      delete roomsData[roomId];
+      renderRooms();
+    } else {
+      toast('❌ Ошибка: ' + (d.error || 'Не удалось закрыть'), 'error');
+    }
+  } catch (e) {
+    toast('❌ Ошибка сети: ' + e.message, 'error');
+  }
+}
+
+// Click outside modal to close & Escape key
+document.querySelectorAll('.modal-overlay').forEach(el => {
+  el.addEventListener('click', e => { if (e.target === el) el.classList.remove('open'); });
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') document.querySelectorAll('.modal-overlay.open').forEach(m => m.classList.remove('open'));
+});
+
+// ─── INIT ───────────────────────────────────────────────────────────────────
+async function init() {
+  log('Luna Admin запускается...', 'sys');
+  log('Сервер: ' + SERVER_URL + ' (VPS)', 'info');
+
+  await fetchVersion();
+  const alive = await checkHealth();
+  if (alive) {
+    await fetchVpsStats();
+    await fetchVpsLogs();
+  }
+
+  connectSocket();
+
+  setInterval(() => checkHealth(), 15000);
+  setInterval(fetchVpsStats, 10000);
+  setInterval(fetchVersion, 60000);
+
+  setTimeout(hideOverlay, 2500);
+}
+
+init();
+</script>
+</body>
+</html>

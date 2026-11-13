@@ -146,7 +146,19 @@ Future<String> _getSettingsPath() async {
   return '${dir.path}/ravestreamer_settings.json';
 }
 
-Future<void> saveSettings(Map<String, dynamic> settings) async {
+// Serialize read–modify–write operations so an unrelated preference or room
+// token cannot be lost when two changes are saved at nearly the same time.
+Future<void> _pendingSettingsWrite = Future<void>.value();
+
+Future<void> saveSettings(Map<String, dynamic> settings) {
+  final snapshot = jsonEncode(settings);
+  _pendingSettingsWrite = _pendingSettingsWrite.then((_) async {
+    await _writeSettings(jsonDecode(snapshot) as Map<String, dynamic>);
+  });
+  return _pendingSettingsWrite;
+}
+
+Future<void> _writeSettings(Map<String, dynamic> settings) async {
   try {
     if (Platform.isWindows) {
       final dir = Directory('C:\\RaveStreamer');
@@ -159,13 +171,16 @@ Future<void> saveSettings(Map<String, dynamic> settings) async {
       try { existing = jsonDecode(await file.readAsString()) as Map<String, dynamic>; } catch(_) {}
     }
     existing.addAll(settings);
-    await file.writeAsString(jsonEncode(existing));
+    final temporary = File('${file.path}.tmp');
+    await temporary.writeAsString(jsonEncode(existing), flush: true);
+    await temporary.rename(file.path);
   } catch (e) {
     debugPrint('Error saving settings: $e');
   }
 }
 
 Future<Map<String, dynamic>> loadSettings() async {
+  await _pendingSettingsWrite;
   try {
     final path = await _getSettingsPath();
     final file = File(path);
@@ -315,12 +330,16 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
 
   Future<void> _loadAllSettings() async {
     final data = await loadSettings();
+    if (!mounted) return;
     if (data.isNotEmpty) {
       setState(() {
-        if (data.containsKey('locale')) _locale = data['locale'] as String;
-        if (data.containsKey('themeName')) _themeName = data['themeName'] as String;
-        if (data.containsKey('chatFontSize')) {
-          _chatFontSize = (data['chatFontSize'] as num).toDouble();
+        final locale = data['locale'];
+        if (locale == 'ru' || locale == 'en') _locale = locale as String;
+        final theme = data['themeName'];
+        if (theme is String && _themes.containsKey(theme)) _themeName = theme;
+        final fontSize = data['chatFontSize'];
+        if (fontSize is num && fontSize.isFinite) {
+          _chatFontSize = fontSize.clamp(10.0, 24.0).toDouble();
         }
         if (data.containsKey('username')) _savedUsername = data['username'] as String;
         if (data.containsKey('clientId') && (data['clientId'] as String).isNotEmpty) {
@@ -699,6 +718,15 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
     });
   }
 
+  void _savePreferences(String locale, String theme, double fontSize) {
+    setState(() {
+      _locale = locale;
+      _themeName = theme;
+      _chatFontSize = fontSize;
+    });
+    unawaited(_saveAllSettings());
+  }
+
   void _setLocale(String lang) {
     setState(() {
       _locale = lang;
@@ -767,6 +795,7 @@ class _RaveStreamerAppState extends State<RaveStreamerApp> {
         initialUsername: _savedUsername,
         initialServerUrl: _savedServerUrl,
         onSavedConnection: _setSavedConnection,
+        onPreferencesSaved: _savePreferences,
         chatFontSize: _chatFontSize,
         onChatFontSizeChange: _setChatFontSize,
         clientId: _clientId,
@@ -787,6 +816,7 @@ class ConnectionPage extends StatefulWidget {
   final double chatFontSize;
   final ValueChanged<double> onChatFontSizeChange;
   final String clientId;
+  final void Function(String, String, double) onPreferencesSaved;
 
   const ConnectionPage({
     super.key,
@@ -800,6 +830,7 @@ class ConnectionPage extends StatefulWidget {
     required this.chatFontSize,
     required this.onChatFontSizeChange,
     required this.clientId,
+    required this.onPreferencesSaved,
   });
 
   @override
@@ -953,177 +984,123 @@ class _ConnectionPageState extends State<ConnectionPage> {
     );
   }
 
-  void _showGlobalSettingsDialog(BuildContext context) {
-    showDialog(
+  Future<void> _showGlobalSettingsDialog(BuildContext context) async {
+    var locale = widget.locale;
+    var theme = widget.themeName;
+    var fontSize = widget.chatFontSize.clamp(10.0, 24.0).toDouble();
+    final saved = await showDialog<bool>(
       context: context,
-      builder: (ctx) {
-        return Dialog(
-          backgroundColor: Colors.transparent,
-          insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-          child: Container(
-            constraints: const BoxConstraints(maxWidth: 550),
-            decoration: BoxDecoration(
-              color: const Color(0xFF161426),
-              borderRadius: BorderRadius.circular(24),
-              border: Border.all(color: Colors.white.withOpacity(0.1), width: 1),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.5),
-                  blurRadius: 25,
-                  spreadRadius: 2,
-                ),
-              ],
-            ),
-            padding: const EdgeInsets.all(24),
-            child: SingleChildScrollView(
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, update) {
+          final ru = locale == 'ru';
+          final preview = _themes[theme] ?? _themes['Dark']!;
+          return AlertDialog(
+            title: Text(ru ? 'Настройки Luna' : 'Luna settings'),
+            scrollable: true,
+            content: SizedBox(
+              width: 440,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  Text(ru ? 'Язык' : 'Language'),
+                  Wrap(
+                    spacing: 8,
                     children: [
-                      Row(
-                        children: [
-                          const Icon(Icons.settings, color: Color(0xFF00F2FE)),
-                          const SizedBox(width: 8),
-                          Text(
-                            widget.locale == 'ru' ? 'Настройки приложения' : 'App Settings',
-                            style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
-                          ),
-                        ],
+                      ChoiceChip(
+                        label: const Text('Русский'),
+                        selected: ru,
+                        onSelected: (_) => update(() => locale = 'ru'),
                       ),
-                      IconButton(
-                        icon: const Icon(Icons.close, color: Colors.white54),
-                        onPressed: () => Navigator.of(ctx).pop(),
+                      ChoiceChip(
+                        label: const Text('English'),
+                        selected: !ru,
+                        onSelected: (_) => update(() => locale = 'en'),
                       ),
                     ],
                   ),
-                const Divider(color: Colors.white12),
-                const SizedBox(height: 12),
-
-                // Language Card
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(12)),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(widget.locale == 'ru' ? 'Язык / Language' : 'Language', style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
-                      Row(
-                        children: [
-                          ChoiceChip(
-                            label: const Text('RU'),
-                            selected: widget.locale == 'ru',
-                            onSelected: (_) => widget.onLocaleChange('ru'),
-                            selectedColor: const Color(0xFF6C63FF),
-                          ),
-                          const SizedBox(width: 8),
-                          ChoiceChip(
-                            label: const Text('EN'),
-                            selected: widget.locale == 'en',
-                            onSelected: (_) => widget.onLocaleChange('en'),
-                            selectedColor: const Color(0xFF6C63FF),
-                          ),
-                        ],
-                      ),
-                    ],
+                  const SizedBox(height: 16),
+                  Text(ru ? 'Оформление' : 'Appearance'),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 4,
+                    children: _themes.entries.map((entry) {
+                      return ChoiceChip(
+                        label: Text(entry.key),
+                        avatar: CircleAvatar(backgroundColor: entry.value.primary),
+                        selected: theme == entry.key,
+                        onSelected: (_) => update(() => theme = entry.key),
+                      );
+                    }).toList(),
                   ),
-                ),
-                const SizedBox(height: 12),
-
-                // Theme Card
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(12)),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(widget.locale == 'ru' ? 'Тема оформления' : 'App Theme', style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8,
-                        children: [
-                          'Dark', 'Neon Cyan', 'Sunset Gold', 'Retro Purple'
-                        ].map((t) => ChoiceChip(
-                          label: Text(t),
-                          selected: widget.themeName == t,
-                          onSelected: (_) => widget.onThemeChange(t),
-                          selectedColor: const Color(0xFF00F2FE).withOpacity(0.4),
-                        )).toList(),
-                      ),
-                    ],
+                  const SizedBox(height: 16),
+                  Text(ru ? 'Размер текста чата' : 'Chat text size'),
+                  Slider(
+                    min: 10,
+                    max: 24,
+                    divisions: 14,
+                    value: fontSize,
+                    label: '${fontSize.round()} px',
+                    semanticFormatterCallback: (value) => '${value.round()} px',
+                    onChanged: (value) => update(() => fontSize = value),
                   ),
-                ),
-                const SizedBox(height: 12),
-
-                // Chat Font Size Card
-                StatefulBuilder(
-                  builder: (context, setSt) {
-                    return Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(12)),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Text(widget.locale == 'ru' ? 'Шрифт чата' : 'Chat Font Size', style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
-                              Text('${widget.chatFontSize.toInt()} px', style: const TextStyle(color: Color(0xFF00F2FE), fontSize: 12)),
-                            ],
-                          ),
-                          Slider(
-                            min: 10.0,
-                            max: 24.0,
-                            divisions: 14,
-                            value: widget.chatFontSize,
-                            activeColor: const Color(0xFF6C63FF),
-                            onChanged: (val) {
-                              setSt(() {});
-                              widget.onChatFontSizeChange(val);
-                            },
-                          ),
-                        ],
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: preview.cardColor,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: preview.primary),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(14),
+                      child: Text(
+                        ru ? 'Так будет выглядеть сообщение в чате.' : 'This is how a chat message will look.',
+                        style: TextStyle(color: Colors.white, fontSize: fontSize),
                       ),
-                    );
-                  },
-                ),
-                const SizedBox(height: 12),
-
-                // Auto-Update Card
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(12)),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Row(
-                          children: [
-                            const Icon(Icons.system_update, size: 16, color: Color(0xFF00F2FE)),
-                          SizedBox(width: 8),
-                          Text('${widget.locale == 'ru' ? 'О приложении' : 'About'} ($globalAppVersion)', style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
-                        ],
-                      ),
-                      ElevatedButton(
-                        onPressed: () {
-                          Navigator.of(ctx).pop();
-                          _fetchVersionFromServer(_serverController.text.trim(), verbose: true);
-                        },
-                        style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00F2FE).withOpacity(0.2), foregroundColor: const Color(0xFF00F2FE)),
-                        child: Text(widget.locale == 'ru' ? 'Проверить' : 'Check'),
-                      ),
-                    ],
+                    ),
                   ),
-                ),
-                // Server Address Input removed on Android
-              ],
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton(
+                      onPressed: () => update(() {
+                        locale = 'ru';
+                        theme = 'Dark';
+                        fontSize = 12;
+                      }),
+                      child: Text(ru ? 'По умолчанию' : 'Restore defaults'),
+                    ),
+                  ),
+                  const Divider(),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.system_update),
+                    title: Text(ru ? 'Проверить обновления' : 'Check for updates'),
+                    subtitle: Text('Luna $globalAppVersion'),
+                    onTap: () => Navigator.of(dialogContext).pop(false),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ),
-      );
-    },
-  );
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: Text(ru ? 'Отмена' : 'Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: Text(ru ? 'Сохранить' : 'Save'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    if (!mounted) return;
+    if (saved == true) {
+      widget.onPreferencesSaved(locale, theme, fontSize);
+    } else if (saved == false) {
+      await _fetchVersionFromServer(_serverController.text.trim(), verbose: true);
+    }
   }
 
   Future<void> _fetchVersionFromServer(String dummy, {bool verbose = false}) async {
@@ -6254,7 +6231,6 @@ class WebviewPlayer {
           
           try {
             final client = HttpClient();
-            client.badCertificateCallback = (cert, host, port) => true;
             var targetUri = Uri.parse(urlParam);
             HttpClientRequest? targetRequest;
             HttpClientResponse? targetResponse;

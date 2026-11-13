@@ -49,6 +49,8 @@ dependencies:
   path_provider: ^2.1.5
   local_notifier: ^0.1.6
   package_info_plus: ^10.2.1
+  desktop_drop: ^0.8.4
+  pasteboard: ^0.5.0
 dev_dependencies:
   flutter_test:
     sdk: flutter

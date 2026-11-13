@@ -14,3 +14,14 @@
 **/.agents/
 **/.system_generated/
 **/brain/
+
+# Local configuration and server runtime files
+/settings.json
+**/node_modules/
+**/.env
+**/.env.*
+!**/.env.example
+/server/uploads/
+/server/room_hosts.json
+/server/yt-dlp*
+**/ravestreamer_settings.json*

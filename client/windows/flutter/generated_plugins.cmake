@@ -3,9 +3,11 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
+  desktop_drop
   flutter_webrtc
   local_notifier
   media_kit_libs_windows_video
+  pasteboard
   screen_retriever_windows
   url_launcher_windows
   webview_windows
